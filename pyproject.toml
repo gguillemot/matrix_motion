@@ -1,0 +1,15 @@
+[project]
+name = "matrix-motion"
+version = "0.1.0"
+description = "Matrix-style live vision demo: objects, face, hand gestures, optional MQTT triggers"
+requires-python = ">=3.10"
+dependencies = [
+  "opencv-python>=4.10.0",
+  "mediapipe>=0.10.14",
+  "ultralytics>=8.2.0",
+  "numpy>=1.26.0",
+  "paho-mqtt>=2.1.0",
+]
+
+[tool.uv]
+package = false
