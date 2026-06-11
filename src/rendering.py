@@ -14,6 +14,20 @@ MATRIX_GREEN = (40, 255, 90)
 MATRIX_DARK_GREEN = (20, 120, 45)
 HUD_BG = (10, 25, 10)
 
+POSE_CONNECTIONS = [
+    (11, 12),
+    (11, 13), (13, 15),
+    (12, 14), (14, 16),
+    (11, 23), (12, 24),
+    (23, 24),
+    (23, 25), (25, 27),
+    (24, 26), (26, 28),
+    (15, 17), (17, 19), (19, 21),
+    (16, 18), (18, 20), (20, 22),
+]
+
+POSE_BODY_LANDMARKS = range(11, 33)
+
 
 class MatrixRain:
     def __init__(self, width: int, height: int, spacing: int = 12, trail_length: int = 4) -> None:
@@ -83,9 +97,31 @@ def draw_face_detections(frame: np.ndarray, detections) -> int:
             bb = det.bounding_box
             x, y, bw, bh = bb.origin_x, bb.origin_y, bb.width, bb.height
             cv2.rectangle(frame, (x, y), (x + bw, y + bh), (80, 255, 140), 2)
-            cv2.putText(frame, "face", (x, max(20, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (80, 255, 140), 2, cv2.LINE_AA)
 
     return faces
+
+
+def draw_pose_skeleton(frame: np.ndarray, pose_results, frame_width: int, frame_height: int) -> int:
+    poses = 0
+
+    if pose_results.pose_landmarks:
+        for pose_landmarks in pose_results.pose_landmarks:
+            poses += 1
+
+            for start, end in POSE_CONNECTIONS:
+                x1 = int(pose_landmarks[start].x * frame_width)
+                y1 = int(pose_landmarks[start].y * frame_height)
+                x2 = int(pose_landmarks[end].x * frame_width)
+                y2 = int(pose_landmarks[end].y * frame_height)
+                cv2.line(frame, (x1, y1), (x2, y2), MATRIX_GREEN, 2)
+
+            for index in POSE_BODY_LANDMARKS:
+                landmark = pose_landmarks[index]
+                cx = int(landmark.x * frame_width)
+                cy = int(landmark.y * frame_height)
+                cv2.circle(frame, (cx, cy), 3, (120, 255, 150), -1)
+
+    return poses
 
 
 def load_challenge_background(asset_name: str, frame_shape: tuple[int, int, int]) -> np.ndarray | None:
@@ -206,7 +242,7 @@ def _detect_gesture_from_states(landmarks: list, thumb_up: bool, index_up: bool,
     return "none"
 
 
-def draw_hud(frame: np.ndarray, fps: float, persons: int, faces: int, event: GameEvent) -> None:
+def draw_hud(frame: np.ndarray, fps: float, persons: int, faces: int, poses: int, event: GameEvent) -> None:
     h, w = frame.shape[:2]
 
     cv2.rectangle(frame, (0, 0), (w, 74), HUD_BG, -1)
@@ -216,7 +252,8 @@ def draw_hud(frame: np.ndarray, fps: float, persons: int, faces: int, event: Gam
     cv2.putText(frame, f"FPS: {fps:4.1f}", (20, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
     cv2.putText(frame, f"PERSONS: {persons}", (170, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
     cv2.putText(frame, f"FACES: {faces}", (350, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
-    cv2.putText(frame, f"{event.phase} | ROUND {event.round_index}/{event.round_total}", (500, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
+    cv2.putText(frame, f"POSES: {poses}", (500, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
+    cv2.putText(frame, f"{event.phase} | ROUND {event.round_index}/{event.round_total}", (690, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
 
     if event.phase == "IN_ROUND":
         cv2.putText(frame, f"TIMER: {event.timer_left:0.1f}s", (20, h - 24), cv2.FONT_HERSHEY_DUPLEX, 0.9, MATRIX_GREEN, 2, cv2.LINE_AA)

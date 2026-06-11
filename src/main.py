@@ -10,7 +10,7 @@ from src.config import AppConfig, parse_args
 from src.challenges import observe_pose
 from src.game_engine import GameEngine, GameState
 from src.mqtt_client import MQTTConfig, MQTTPublisher
-from src.rendering import MatrixRain, draw_face_detections, draw_hand_detections, draw_hud, draw_yolo_detections, render_challenge_frame
+from src.rendering import MatrixRain, draw_face_detections, draw_hand_detections, draw_hud, draw_pose_skeleton, draw_yolo_detections, render_challenge_frame
 from src.tracking import YoloWorker, create_face_detector, create_hand_landmarker, create_pose_landmarker
 
 
@@ -102,6 +102,7 @@ def run(cfg: AppConfig) -> None:
             persons = draw_yolo_detections(frame, cached_boxes, getattr(model, "names", {}))
             faces = draw_face_detections(frame, face_results.detections)
             hand_gestures = draw_hand_detections(frame, hand_results, w_frame, h_frame)
+            poses = draw_pose_skeleton(frame, pose_results, w_frame, h_frame)
             pose_observation = observe_pose(pose_results)
 
             now = time.monotonic()
@@ -118,7 +119,7 @@ def run(cfg: AppConfig) -> None:
                 fps = instant_fps if fps == 0 else (0.9 * fps + 0.1 * instant_fps)
             last_tick = tick
 
-            draw_hud(frame, fps=fps, persons=persons, faces=faces, event=event)
+            draw_hud(frame, fps=fps, persons=persons, faces=faces, poses=poses, event=event)
 
             cv2.imshow(cfg.window_name, frame)
             key = cv2.waitKey(1) & 0xFF
