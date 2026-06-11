@@ -31,6 +31,8 @@ class AppConfig:
     mqtt_client_id: str
     sequence_length: int
     victory_pill: str
+    round_duration: float
+    countdown_duration: float
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,8 +54,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mqtt-topic", type=str, default="")
     parser.add_argument("--mqtt-token", type=str, default="")
     parser.add_argument("--mqtt-client-id", type=str, default=f"matrix-motion-{random.randint(1000, 9999)}")
-    parser.add_argument("--sequence-length", type=int, choices=(5, 10), default=5)
-    parser.add_argument("--victory-pill", type=str, choices=("auto", "red", "blue"), default="auto")
+    parser.add_argument("--sequence-length", type=int, choices=(5, 10), default=5,
+                        help="(legacy) ignore par le mode jeu BreizhCamp, qui joue toujours les 5 figures")
+    parser.add_argument("--victory-pill", type=str, choices=("auto", "red", "blue"), default="auto",
+                        help="pilule MQTT par defaut si la figure pilule n'a pas ete reussie")
+    parser.add_argument("--round-duration", type=float, default=8.0,
+                        help="duree en secondes laissee pour reussir chaque figure")
+    parser.add_argument("--countdown-duration", type=float, default=3.0,
+                        help="duree du decompte 3-2-1 avant la premiere figure")
     return parser
 
 
@@ -81,4 +89,6 @@ def parse_args(argv: Sequence[str] | None = None) -> AppConfig:
         mqtt_client_id=args.mqtt_client_id,
         sequence_length=args.sequence_length,
         victory_pill=args.victory_pill,
+        round_duration=args.round_duration,
+        countdown_duration=args.countdown_duration,
     )
