@@ -18,6 +18,12 @@ Real-time demo with a camera in Matrix style:
 - `src/mqtt_client.py`: MQTT payload and publisher
 - `tests/`: unit tests for gestures, transitions, and MQTT payloads
 
+## Prerequisite
+
+Install uv : 
+ - Official doc : https://docs.astral.sh/uv/
+ - Asdf Plugin : https://docs.astral.sh/uv/
+
 ## 1) Install with uv
 
 From repository root:
