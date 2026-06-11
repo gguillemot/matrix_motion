@@ -1,11 +1,30 @@
 # Matrix Vision (Python + uv)
 
 Real-time demo with a camera in Matrix style:
+- Arcade mini-game for the BreizhCamp 2026 booth (30-45 s sessions, see below)
 - Object/person detection (YOLOv8)
 - Face detection (MediaPipe)
 - Hand gesture recognition (MediaPipe Hands)
 - Fullscreen neon green HUD + Matrix rain effect
 - Optional MQTT trigger to your NodeMCU servo project
+
+## Mode jeu BreizhCamp 2026
+
+State machine : `ATTRACT` (ecran d'accueil) -> `COUNTDOWN` (3, 2, 1) -> `IN_ROUND` (5 figures, ordre aleatoire) -> `SCORE`.
+
+Demarrage : montrer **2 paumes ouvertes pendant 1 s** face a la camera (zero calibration). Une figure ratee (temps ecoule) passe simplement a la suivante avec 0 point : la partie se termine toujours sur l'ecran de score. Scoring : **100 pts par figure + 10 pts par seconde restante**.
+
+Les 5 figures (seuils geometriques documentes dans `src/challenges.py`) :
+
+| Figure | Action joueur | Detection |
+|---|---|---|
+| The Neo Dodge | Pencher fortement buste + tete sur le cote | Offset nez / centre des epaules >= 30 % de l'envergure d'epaules |
+| Red Pill / Blue Pill | Attraper une des 2 pilules affichees avec la paume ouverte | Paume dans la hitbox 0.4 s — **la pilule choisie part en MQTT** |
+| Follow the White Rabbit | Oreilles de lapin (index + majeur) au-dessus de la tete | 2 mains `bunny_ears` au-dessus du nez, 0.4 s |
+| There Is No Spoon | Pincer la cuillere virtuelle et tourner la main | Pince pouce-index + rotation cumulee >= 45° |
+| Agent Smith | Ne plus bouger pendant le scan (lunettes overlay) | Nez immobile (< 10 % de l'envergure d'epaules) pendant 2 s |
+
+Reglages : `--round-duration 8.0` (temps par figure), `--countdown-duration 3.0`. Sur le stand, lancer avec `--disable-yolo` pour maximiser les FPS.
 
 ## Structure
 
@@ -57,27 +76,15 @@ uv run --project matrix_motion python main.py \
   --mqtt-token CHANGE_ME_TO_A_LONG_RANDOM_SECRET
 ```
 
-Default campaign uses 5 challenges. You can switch to 10 with:
-
-```bash
-uv run --project matrix_motion python main.py --sequence-length 10
-```
-
-If you want to force the victory MQTT color instead of using the automatic final-step color, pass `--victory-pill red` or `--victory-pill blue`.
+A game always plays the 5 BreizhCamp figures in random order. To force the fallback MQTT pill color (used when the pill figure was missed), pass `--victory-pill red` or `--victory-pill blue`.
 
 ## Controls
 
 - `q` or `Esc`: quit
 - `f`: toggle fullscreen
-- Two hands open, held 1 second: start or restart the campaign
+- Two hands open, held 1 second: start or restart a game
 
-## Gestures
-
-- `point`: useful for the red pill challenge
-- `open_palm`: useful for the stop-bullets / bunny-ears challenges
-- `fist`: useful for dodge / kung-fu challenges
-
-MQTT is published only once, on final victory, with a payload such as:
+MQTT is published only once, when the score screen is reached, with the pill chosen by the player during the Red Pill / Blue Pill figure (fallback: `--victory-pill`, `blue` in `auto` mode). Payload:
 
 Payload published to MQTT:
 
@@ -86,8 +93,6 @@ Payload published to MQTT:
 ```
 
 Compatible with your NodeMCU firmware payload format.
-
-Victory uses the last challenge's pill color in `auto` mode. In the default 5-step campaign it is `blue`; in the 10-step campaign it is `red`.
 
 ## Tests
 
@@ -110,8 +115,8 @@ uv run --project matrix_motion python main.py --camera-index 1
 # Windowed mode instead of fullscreen
 uv run --project matrix_motion python main.py --windowed
 
-# Switch to 10 challenges
-uv run --project matrix_motion python main.py --sequence-length 10
+# Give more time per figure (default 8 s)
+uv run --project matrix_motion python main.py --round-duration 10
 ```
 
 ## Raspberry Pi notes

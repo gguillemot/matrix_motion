@@ -7,10 +7,25 @@ import mediapipe as mp
 from ultralytics import YOLO
 
 from src.config import AppConfig, parse_args
-from src.challenges import observe_pose
-from src.game_engine import GameEngine, GameState
+from src.challenges import observe_hands, observe_pose
+from src.game_engine import ATTRACT, COUNTDOWN, IN_ROUND, SCORE, GameEngine
 from src.mqtt_client import MQTTConfig, MQTTPublisher
-from src.rendering import MatrixRain, draw_face_detections, draw_hand_detections, draw_hud, draw_pose_skeleton, draw_yolo_detections, render_challenge_frame
+from src.rendering import (
+    MatrixRain,
+    draw_agent_glasses,
+    draw_attract_screen,
+    draw_countdown,
+    draw_face_detections,
+    draw_flash,
+    draw_hand_detections,
+    draw_hud,
+    draw_pills,
+    draw_pose_skeleton,
+    draw_round_overlay,
+    draw_score_screen,
+    draw_spoon,
+    draw_yolo_detections,
+)
 from src.tracking import YoloWorker, create_face_detector, create_hand_landmarker, create_pose_landmarker
 
 
@@ -48,8 +63,8 @@ def run(cfg: AppConfig) -> None:
     pose_landmarker = None
     rain = None
     engine = GameEngine(
-        sequence_length=cfg.sequence_length,
-        state=GameState(status="SYSTEM ONLINE"),
+        round_duration=cfg.round_duration,
+        countdown_duration=cfg.countdown_duration,
         victory_pill=cfg.victory_pill,
     )
 
@@ -73,7 +88,6 @@ def run(cfg: AppConfig) -> None:
 
         frame = cv2.flip(frame, 1)
         rain = MatrixRain(frame.shape[1], frame.shape[0])
-        engine.state.status_until = time.monotonic() + 2.0
 
         frame_idx = 0
         last_tick = time.perf_counter()
@@ -98,19 +112,45 @@ def run(cfg: AppConfig) -> None:
             if yolo_worker is not None and frame_idx % cfg.yolo_stride == 0:
                 yolo_worker.submit(frame.copy())
 
-            cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
-            persons = draw_yolo_detections(frame, cached_boxes, getattr(model, "names", {}))
-            faces = draw_face_detections(frame, face_results.detections)
-            hand_gestures = draw_hand_detections(frame, hand_results, w_frame, h_frame)
-            poses = draw_pose_skeleton(frame, pose_results, w_frame, h_frame)
+            hands = observe_hands(hand_results)
             pose_observation = observe_pose(pose_results)
 
             now = time.monotonic()
-            event = engine.update_with_pose(hand_gestures, pose_observation, now, publisher.publish_pill)
+            event = engine.update(hands, pose_observation, now, publisher.publish_pill)
+            if event.published:
+                print(f"[MQTT] pill published: {event.chosen_pill or 'default'}")
 
-            render_challenge_frame(frame, event)
+            # Les boites YOLO ne sont dessinees qu'en attract : pendant la
+            # partie, elles parasitent la lecture des figures.
+            cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
+            persons = draw_yolo_detections(
+                frame, cached_boxes, getattr(model, "names", {}), draw=event.phase == ATTRACT
+            )
+
+            scanning = event.phase == IN_ROUND and event.challenge_kind == "scan"
+            if scanning:
+                faces = draw_agent_glasses(frame, face_results.detections, event.figure_progress)
+            else:
+                faces = draw_face_detections(frame, face_results.detections)
+
+            draw_hand_detections(frame, hand_results, w_frame, h_frame)
+            poses = draw_pose_skeleton(frame, pose_results, w_frame, h_frame)
+
+            if event.phase == ATTRACT:
+                draw_attract_screen(frame, event)
+            elif event.phase == COUNTDOWN:
+                draw_countdown(frame, event)
+            elif event.phase == IN_ROUND:
+                draw_round_overlay(frame, event)
+                if event.challenge_kind == "pill":
+                    draw_pills(frame, event)
+                elif event.challenge_kind == "spoon":
+                    draw_spoon(frame, event)
+            elif event.phase == SCORE:
+                draw_score_screen(frame, event)
 
             rain.draw(frame, boost=event.rain_boost)
+            draw_flash(frame, event)
 
             tick = time.perf_counter()
             dt = tick - last_tick

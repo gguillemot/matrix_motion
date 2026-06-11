@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import math
 import random
 import string
+import time
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from src.challenges import HAND_CONNECTIONS
+from src.challenges import HAND_CONNECTIONS, PILL_ZONES
 from src.game_engine import GameEvent
 
 MATRIX_GREEN = (40, 255, 90)
 MATRIX_DARK_GREEN = (20, 120, 45)
+MATRIX_PALE_GREEN = (190, 255, 190)
 HUD_BG = (10, 25, 10)
+PILL_COLORS = {"red": (60, 60, 255), "blue": (255, 140, 40)}  # BGR
 
 POSE_CONNECTIONS = [
     (11, 12),
@@ -68,7 +72,57 @@ def add_scanlines(frame: np.ndarray, step: int = 4) -> None:
     frame[::step, :] = (frame[::step, :] * 0.55).astype(np.uint8)
 
 
-def draw_yolo_detections(frame: np.ndarray, cached_boxes: list, model_names) -> int:
+# ---------------------------------------------------------------------------
+# Helpers texte / overlay
+# ---------------------------------------------------------------------------
+
+
+def _put_centered(
+    frame: np.ndarray,
+    text: str,
+    y: int,
+    scale: float,
+    color: tuple[int, int, int],
+    thickness: int = 2,
+    font: int = cv2.FONT_HERSHEY_DUPLEX,
+    glow: bool = False,
+) -> None:
+    (text_w, _), _ = cv2.getTextSize(text, font, scale, thickness)
+    x = max(10, (frame.shape[1] - text_w) // 2)
+    if glow:
+        cv2.putText(frame, text, (x, y), font, scale, MATRIX_DARK_GREEN, thickness + 4, cv2.LINE_AA)
+    cv2.putText(frame, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
+
+
+def _darken(frame: np.ndarray, alpha: float) -> None:
+    cv2.addWeighted(np.zeros_like(frame), alpha, frame, 1.0 - alpha, 0, frame)
+
+
+def _blink(period: float = 0.8) -> bool:
+    return int(time.monotonic() / period) % 2 == 0
+
+
+def _draw_progress_bar(
+    frame: np.ndarray,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    progress: float,
+    color: tuple[int, int, int] = MATRIX_GREEN,
+) -> None:
+    cv2.rectangle(frame, (x, y), (x + width, y + height), MATRIX_DARK_GREEN, 1)
+    fill = int(width * max(0.0, min(1.0, progress)))
+    if fill > 0:
+        cv2.rectangle(frame, (x, y), (x + fill, y + height), color, -1)
+
+
+# ---------------------------------------------------------------------------
+# Detections (debug / feedback visuel)
+# ---------------------------------------------------------------------------
+
+
+def draw_yolo_detections(frame: np.ndarray, cached_boxes: list, model_names, draw: bool = True) -> int:
     persons = 0
 
     for box in cached_boxes:
@@ -76,10 +130,13 @@ def draw_yolo_detections(frame: np.ndarray, cached_boxes: list, model_names) -> 
         conf = float(box.conf[0])
         label = model_names.get(cls_id, str(cls_id)) if hasattr(model_names, "get") else str(cls_id)
 
-        x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
         if label == "person":
             persons += 1
 
+        if not draw:
+            continue
+
+        x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
         cv2.rectangle(frame, (x1, y1), (x2, y2), MATRIX_GREEN, 2)
         cv2.rectangle(frame, (x1 + 2, y1 + 2), (x2 - 2, y2 - 2), MATRIX_DARK_GREEN, 1)
         text = f"{label} {conf:.2f}"
@@ -124,6 +181,235 @@ def draw_pose_skeleton(frame: np.ndarray, pose_results, frame_width: int, frame_
     return poses
 
 
+def draw_hand_detections(frame: np.ndarray, hand_results, frame_width: int, frame_height: int) -> int:
+    hands = 0
+
+    if hand_results.hand_landmarks:
+        for lm_list in hand_results.hand_landmarks:
+            hands += 1
+            for start, end in HAND_CONNECTIONS:
+                x1 = int(lm_list[start].x * frame_width)
+                y1 = int(lm_list[start].y * frame_height)
+                x2 = int(lm_list[end].x * frame_width)
+                y2 = int(lm_list[end].y * frame_height)
+                cv2.line(frame, (x1, y1), (x2, y2), MATRIX_DARK_GREEN, 2)
+
+            for lm in lm_list:
+                cx = int(lm.x * frame_width)
+                cy = int(lm.y * frame_height)
+                cv2.circle(frame, (cx, cy), 4, MATRIX_GREEN, -1)
+
+    return hands
+
+
+# ---------------------------------------------------------------------------
+# Ecrans du jeu
+# ---------------------------------------------------------------------------
+
+
+def draw_attract_screen(frame: np.ndarray, event: GameEvent) -> None:
+    height, _ = frame.shape[:2]
+    _darken(frame, 0.45)
+
+    _put_centered(frame, "ENTER THE MATRIX", height // 2 - 70, 2.2, MATRIX_GREEN, 4, glow=True)
+    if _blink(1.4):
+        _put_centered(frame, "WAKE UP, NEO...", height // 2, 1.0, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
+    if _blink(0.8) or event.start_hold_progress > 0:
+        _put_centered(frame, "MONTRE TES 2 PAUMES POUR COMMENCER", height // 2 + 80, 0.95, MATRIX_GREEN, 2)
+
+    if event.start_hold_progress > 0:
+        bar_width = 320
+        _draw_progress_bar(frame, (frame.shape[1] - bar_width) // 2, height // 2 + 110, bar_width, 14, event.start_hold_progress)
+
+
+def draw_countdown(frame: np.ndarray, event: GameEvent) -> None:
+    height, _ = frame.shape[:2]
+    _darken(frame, 0.35)
+    value = max(1, event.countdown_value)
+    # Pulsation : le chiffre grossit a mesure que la seconde s'ecoule.
+    fraction = time.monotonic() % 1.0
+    scale = 5.0 + 1.5 * fraction
+    _put_centered(frame, "GET READY", height // 2 - 130, 1.1, MATRIX_PALE_GREEN, 2)
+    _put_centered(frame, str(value), height // 2 + 70, scale, MATRIX_GREEN, 10, glow=True)
+
+
+def draw_round_overlay(frame: np.ndarray, event: GameEvent) -> None:
+    height, width = frame.shape[:2]
+
+    # Bandeau figure (sous le HUD)
+    round_label = f"ROUND {event.round_index}/{event.round_total}"
+    cv2.putText(frame, round_label, (24, 116), cv2.FONT_HERSHEY_DUPLEX, 0.85, MATRIX_GREEN, 2, cv2.LINE_AA)
+    cv2.putText(frame, event.challenge_title.upper(), (24, 158), cv2.FONT_HERSHEY_DUPLEX, 1.15, MATRIX_GREEN, 2, cv2.LINE_AA)
+    cv2.putText(frame, event.challenge_prompt, (24, 196), cv2.FONT_HERSHEY_SIMPLEX, 0.78, MATRIX_PALE_GREEN, 2, cv2.LINE_AA)
+
+    # Progression de la figure (maintien pilule/bunny, cuillere, scan)
+    if event.figure_progress > 0:
+        _draw_progress_bar(frame, 24, 212, 280, 12, event.figure_progress)
+
+    # Timer : barre + texte. Verte, puis rouge sous 2 s.
+    ratio = event.timer_left / event.round_duration if event.round_duration > 0 else 0.0
+    timer_color = MATRIX_GREEN if event.timer_left > 2.0 else (60, 60, 255)
+    bar_margin = 24
+    bar_y = height - 46
+    _draw_progress_bar(frame, bar_margin, bar_y, width - 2 * bar_margin, 16, ratio, timer_color)
+    cv2.putText(
+        frame,
+        f"{event.timer_left:0.1f}s",
+        (bar_margin, bar_y - 12),
+        cv2.FONT_HERSHEY_DUPLEX,
+        0.9,
+        timer_color,
+        2,
+        cv2.LINE_AA,
+    )
+
+
+def draw_pills(frame: np.ndarray, event: GameEvent) -> None:
+    height, width = frame.shape[:2]
+
+    for name, (zone_x, zone_y) in PILL_ZONES.items():
+        cx, cy = int(zone_x * width), int(zone_y * height)
+        color = PILL_COLORS[name]
+        hovered = event.pill_hover == name
+
+        # Halo
+        overlay = frame.copy()
+        cv2.circle(overlay, (cx, cy), 70 if hovered else 58, color, -1)
+        cv2.addWeighted(overlay, 0.25, frame, 0.75, 0, frame)
+
+        # Capsule + reflet
+        axes = (52, 26)
+        cv2.ellipse(frame, (cx, cy), axes, 25, 0, 360, color, -1)
+        cv2.ellipse(frame, (cx, cy), axes, 25, 0, 360, (255, 255, 255), 2)
+        cv2.ellipse(frame, (cx - 12, cy - 10), (16, 6), 25, 0, 360, (255, 255, 255), -1)
+
+        if hovered:
+            cv2.circle(frame, (cx, cy), 80, (255, 255, 255), 2)
+
+        label = name.upper()
+        (text_w, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_DUPLEX, 0.8, 2)
+        cv2.putText(frame, label, (cx - text_w // 2, cy + 78), cv2.FONT_HERSHEY_DUPLEX, 0.8, color, 2, cv2.LINE_AA)
+
+
+def draw_spoon(frame: np.ndarray, event: GameEvent) -> None:
+    height, width = frame.shape[:2]
+
+    if event.spoon_anchor is None:
+        if _blink(0.8):
+            _put_centered(frame, "PINCE POUCE + INDEX POUR TENIR LA CUILLERE", height - 90, 0.8, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
+        return
+
+    anchor_x = int(event.spoon_anchor[0] * width)
+    anchor_y = int(event.spoon_anchor[1] * height)
+    # La cuillere part de la pince, a l'oppose des doigts.
+    direction = event.spoon_angle + math.pi
+    bend = event.figure_progress
+    length = 140
+    steps = 12
+
+    points = []
+    for i in range(steps + 1):
+        t = i / steps
+        # Courbure quadratique : le manche se tord de plus en plus vers le bout.
+        offset = bend * 70 * t * t
+        px = anchor_x + math.cos(direction) * length * t - math.sin(direction) * offset
+        py = anchor_y + math.sin(direction) * length * t + math.cos(direction) * offset
+        points.append((int(px), int(py)))
+
+    cv2.polylines(frame, [np.array(points, dtype=np.int32)], False, (200, 200, 210), 7, cv2.LINE_AA)
+    cv2.polylines(frame, [np.array(points, dtype=np.int32)], False, (245, 245, 250), 3, cv2.LINE_AA)
+    # Cuilleron au bout du manche
+    tip_x, tip_y = points[-1]
+    cv2.ellipse(frame, (tip_x, tip_y), (22, 30), math.degrees(direction), 0, 360, (220, 220, 230), -1)
+    cv2.ellipse(frame, (tip_x, tip_y), (22, 30), math.degrees(direction), 0, 360, (160, 160, 170), 2)
+
+
+def draw_agent_glasses(frame: np.ndarray, detections, progress: float) -> int:
+    faces = 0
+    if not detections:
+        return faces
+
+    for det in detections:
+        faces += 1
+        bb = det.bounding_box
+        x, y, bw, bh = bb.origin_x, bb.origin_y, bb.width, bb.height
+
+        # Lunettes d'agent : deux verres noirs + branches, calees sur la bbox.
+        eye_y = y + int(0.38 * bh)
+        eye_dx = int(0.22 * bw)
+        eye_axes = (max(6, int(0.15 * bw)), max(4, int(0.10 * bh)))
+        left_eye = (x + bw // 2 - eye_dx, eye_y)
+        right_eye = (x + bw // 2 + eye_dx, eye_y)
+        for center in (left_eye, right_eye):
+            cv2.ellipse(frame, center, eye_axes, 0, 0, 360, (20, 20, 20), -1)
+            cv2.ellipse(frame, center, eye_axes, 0, 0, 360, (90, 90, 90), 2)
+        cv2.line(frame, (left_eye[0] + eye_axes[0], eye_y), (right_eye[0] - eye_axes[0], eye_y), (20, 20, 20), 3)
+        cv2.line(frame, (x, eye_y), (left_eye[0] - eye_axes[0], eye_y), (20, 20, 20), 3)
+        cv2.line(frame, (right_eye[0] + eye_axes[0], eye_y), (x + bw, eye_y), (20, 20, 20), 3)
+
+        # Ligne de scan animee par la progression d'immobilite
+        scan_y = y + int(progress * bh)
+        cv2.line(frame, (x, scan_y), (x + bw, scan_y), MATRIX_GREEN, 2)
+        cv2.rectangle(frame, (x, y), (x + bw, y + bh), MATRIX_DARK_GREEN, 1)
+        cv2.putText(
+            frame,
+            f"SCANNING {int(progress * 100)}%",
+            (x, max(20, y - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            MATRIX_GREEN,
+            2,
+            cv2.LINE_AA,
+        )
+
+    return faces
+
+
+def draw_flash(frame: np.ndarray, event: GameEvent) -> None:
+    if not event.flash_message:
+        return
+
+    height, width = frame.shape[:2]
+    band_top, band_bottom = height // 2 - 60, height // 2 + 30
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, band_top), (width, band_bottom), (5, 15, 5), -1)
+    cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+    _put_centered(frame, event.flash_message, height // 2, 1.6, MATRIX_GREEN, 3, glow=True)
+
+
+def draw_score_screen(frame: np.ndarray, event: GameEvent) -> None:
+    height, _ = frame.shape[:2]
+    _darken(frame, 0.55)
+
+    successes = sum(result.success for result in event.round_results)
+    headline = "ACCESS GRANTED" if successes else "SYSTEM FAILURE"
+    _put_centered(frame, headline, 150, 1.8, MATRIX_GREEN, 3, glow=True)
+    _put_centered(frame, f"SCORE  {event.score}", 215, 1.3, MATRIX_PALE_GREEN, 2)
+
+    y = 280
+    for result in event.round_results:
+        mark = "[OK]" if result.success else "[--]"
+        points = f"+{result.points}" if result.success else "  0"
+        color = MATRIX_GREEN if result.success else (90, 130, 95)
+        _put_centered(frame, f"{mark} {result.title.upper()}  {points}", y, 0.75, color, 2, cv2.FONT_HERSHEY_SIMPLEX)
+        y += 38
+
+    if event.chosen_pill:
+        _put_centered(frame, f"PILL OF CHOICE : {event.chosen_pill.upper()}", y + 10, 0.85, PILL_COLORS[event.chosen_pill], 2)
+        y += 48
+
+    if _blink(0.8) or event.start_hold_progress > 0:
+        _put_centered(frame, "2 PAUMES OUVERTES POUR REJOUER", height - 70, 0.9, MATRIX_GREEN, 2)
+    if event.start_hold_progress > 0:
+        bar_width = 320
+        _draw_progress_bar(frame, (frame.shape[1] - bar_width) // 2, height - 50, bar_width, 14, event.start_hold_progress)
+
+
+# ---------------------------------------------------------------------------
+# HUD
+# ---------------------------------------------------------------------------
+
+
 def load_challenge_background(asset_name: str, frame_shape: tuple[int, int, int]) -> np.ndarray | None:
     if not asset_name:
         return None
@@ -140,108 +426,6 @@ def load_challenge_background(asset_name: str, frame_shape: tuple[int, int, int]
     return cv2.resize(background, (width, height), interpolation=cv2.INTER_AREA)
 
 
-def render_challenge_frame(frame: np.ndarray, event: GameEvent) -> None:
-    height, width = frame.shape[:2]
-    background = load_challenge_background(event.challenge_background_asset, frame.shape)
-    panel_top = 92
-    panel_bottom = height - 90
-    panel_left = 40
-    panel_right = width - 40
-
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (panel_left, panel_top), (panel_right, panel_bottom), (8, 18, 8), -1)
-    cv2.rectangle(overlay, (panel_left, panel_top), (panel_right, panel_bottom), (10, 28, 10), 2)
-
-    if background is not None:
-        card_width = min(520, max(320, int(width * 0.36)))
-        card_height = min(320, max(220, int(height * 0.34)))
-        card_x = panel_left + 18
-        card_y = panel_top + 18
-        bg_card = cv2.resize(background, (card_width, card_height), interpolation=cv2.INTER_AREA)
-        overlay[card_y : card_y + card_height, card_x : card_x + card_width] = bg_card
-
-    cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
-
-    prompt = event.challenge_prompt or ""
-    title = event.challenge_title or ""
-    timer = max(0.0, event.timer_left)
-    round_label = f"ROUND {event.round_index}/{event.round_total}" if event.round_total else "ROUND"
-    cv2.putText(frame, round_label, (70, 132), cv2.FONT_HERSHEY_DUPLEX, 1.0, MATRIX_GREEN, 2, cv2.LINE_AA)
-    cv2.putText(frame, title.upper(), (70, 180), cv2.FONT_HERSHEY_DUPLEX, 0.95, MATRIX_GREEN, 2, cv2.LINE_AA)
-    cv2.putText(frame, prompt, (70, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.82, (190, 255, 190), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"TIMER {timer:0.1f}s", (70, 280), cv2.FONT_HERSHEY_DUPLEX, 0.9, MATRIX_GREEN, 2, cv2.LINE_AA)
-
-
-def draw_hand_detections(frame: np.ndarray, hand_results, frame_width: int, frame_height: int) -> list[str]:
-    gestures: list[str] = []
-
-    if hand_results.hand_landmarks and hand_results.handedness:
-        for lm_list, handedness in zip(hand_results.hand_landmarks, hand_results.handedness):
-            for start, end in HAND_CONNECTIONS:
-                x1 = int(lm_list[start].x * frame_width)
-                y1 = int(lm_list[start].y * frame_height)
-                x2 = int(lm_list[end].x * frame_width)
-                y2 = int(lm_list[end].y * frame_height)
-                cv2.line(frame, (x1, y1), (x2, y2), MATRIX_DARK_GREEN, 2)
-
-            for lm in lm_list:
-                cx = int(lm.x * frame_width)
-                cy = int(lm.y * frame_height)
-                cv2.circle(frame, (cx, cy), 4, MATRIX_GREEN, -1)
-
-            hand_label = handedness[0].category_name
-            thumb_up, index_up, middle_up, ring_up, pinky_up = _finger_states(lm_list, hand_label)
-            local_gesture = _detect_gesture_from_states(lm_list, thumb_up, index_up, middle_up, ring_up, pinky_up)
-            gestures.append(local_gesture)
-
-    return gestures
-
-
-def _finger_states(landmarks: list, hand_label: str) -> tuple[bool, bool, bool, bool, bool]:
-    thumb_tip = landmarks[4]
-    thumb_ip = landmarks[3]
-
-    index_tip, index_pip = landmarks[8], landmarks[6]
-    middle_tip, middle_pip = landmarks[12], landmarks[10]
-    ring_tip, ring_pip = landmarks[16], landmarks[14]
-    pinky_tip, pinky_pip = landmarks[20], landmarks[18]
-
-    if hand_label == "Right":
-        thumb_up = thumb_tip.x < thumb_ip.x
-    else:
-        thumb_up = thumb_tip.x > thumb_ip.x
-
-    index_up = index_tip.y < index_pip.y
-    middle_up = middle_tip.y < middle_pip.y
-    ring_up = ring_tip.y < ring_pip.y
-    pinky_up = pinky_tip.y < pinky_pip.y
-
-    return thumb_up, index_up, middle_up, ring_up, pinky_up
-
-
-def _detect_gesture_from_states(landmarks: list, thumb_up: bool, index_up: bool, middle_up: bool, ring_up: bool, pinky_up: bool) -> str:
-    thumb_tip = landmarks[4]
-    index_tip = landmarks[8]
-    dist_thumb_index = np.hypot(thumb_tip.x - index_tip.x, thumb_tip.y - index_tip.y)
-
-    if dist_thumb_index < 0.05 and middle_up and ring_up and pinky_up:
-        return "ok_sign"
-
-    if thumb_up and not index_up and not middle_up and not ring_up and not pinky_up:
-        return "thumbs_up"
-
-    if thumb_up and index_up and middle_up and ring_up and pinky_up:
-        return "open_palm"
-
-    if index_up and not middle_up and not ring_up and not pinky_up:
-        return "point"
-
-    if not thumb_up and not index_up and not middle_up and not ring_up and not pinky_up:
-        return "fist"
-
-    return "none"
-
-
 def draw_hud(frame: np.ndarray, fps: float, persons: int, faces: int, poses: int, event: GameEvent) -> None:
     h, w = frame.shape[:2]
 
@@ -253,14 +437,9 @@ def draw_hud(frame: np.ndarray, fps: float, persons: int, faces: int, poses: int
     cv2.putText(frame, f"PERSONS: {persons}", (170, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
     cv2.putText(frame, f"FACES: {faces}", (350, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
     cv2.putText(frame, f"POSES: {poses}", (500, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
-    cv2.putText(frame, f"{event.phase} | ROUND {event.round_index}/{event.round_total}", (690, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
 
-    if event.phase == "IN_ROUND":
-        cv2.putText(frame, f"TIMER: {event.timer_left:0.1f}s", (20, h - 24), cv2.FONT_HERSHEY_DUPLEX, 0.9, MATRIX_GREEN, 2, cv2.LINE_AA)
-    elif event.phase in ("VICTORY", "GAME_OVER"):
-        cv2.putText(frame, "DEUX MAINS OUVERTES 1s POUR RESTART", (20, h - 24), cv2.FONT_HERSHEY_DUPLEX, 0.8, MATRIX_GREEN, 2, cv2.LINE_AA)
-    else:
-        cv2.putText(frame, "DEUX MAINS OUVERTES 1s POUR DEMARRER", (20, h - 24), cv2.FONT_HERSHEY_DUPLEX, 0.8, MATRIX_GREEN, 2, cv2.LINE_AA)
-
-    if event.status:
-        cv2.putText(frame, event.status, (20, h - 48), cv2.FONT_HERSHEY_DUPLEX, 0.9, MATRIX_GREEN, 2, cv2.LINE_AA)
+    status = f"{event.phase}"
+    if event.round_total:
+        status += f" | ROUND {event.round_index}/{event.round_total}"
+    cv2.putText(frame, status, (w - 420, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
+    cv2.putText(frame, f"SCORE: {event.score}", (w - 420, 58), cv2.FONT_HERSHEY_DUPLEX, 0.7, MATRIX_GREEN, 2, cv2.LINE_AA)
