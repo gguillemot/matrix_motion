@@ -29,6 +29,8 @@ class AppConfig:
     mqtt_topic: str
     mqtt_token: str
     mqtt_client_id: str
+    sequence_length: int
+    victory_pill: str
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mqtt-topic", type=str, default="")
     parser.add_argument("--mqtt-token", type=str, default="")
     parser.add_argument("--mqtt-client-id", type=str, default=f"matrix-motion-{random.randint(1000, 9999)}")
+    parser.add_argument("--sequence-length", type=int, choices=(5, 10), default=5)
+    parser.add_argument("--victory-pill", type=str, choices=("auto", "red", "blue"), default="auto")
     return parser
 
 
@@ -75,4 +79,6 @@ def parse_args(argv: Sequence[str] | None = None) -> AppConfig:
         mqtt_topic=args.mqtt_topic,
         mqtt_token=args.mqtt_token,
         mqtt_client_id=args.mqtt_client_id,
+        sequence_length=args.sequence_length,
+        victory_pill=args.victory_pill,
     )

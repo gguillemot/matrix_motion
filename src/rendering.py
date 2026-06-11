@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import random
 import string
+from pathlib import Path
 
 import cv2
 import numpy as np
 
-from src.challenges import HAND_CONNECTIONS, detect_gesture
+from src.challenges import HAND_CONNECTIONS
+from src.game_engine import GameEvent
 
 MATRIX_GREEN = (40, 255, 90)
 MATRIX_DARK_GREEN = (20, 120, 45)
@@ -86,8 +88,50 @@ def draw_face_detections(frame: np.ndarray, detections) -> int:
     return faces
 
 
-def draw_hand_detections(frame: np.ndarray, hand_results, frame_width: int, frame_height: int) -> str:
-    gesture = "none"
+def load_challenge_background(asset_name: str, frame_shape: tuple[int, int, int]) -> np.ndarray | None:
+    if not asset_name:
+        return None
+
+    asset_path = Path(__file__).resolve().parent.parent / "assets" / asset_name
+    if not asset_path.exists():
+        return None
+
+    background = cv2.imread(str(asset_path), cv2.IMREAD_COLOR)
+    if background is None:
+        return None
+
+    height, width = frame_shape[:2]
+    return cv2.resize(background, (width, height), interpolation=cv2.INTER_AREA)
+
+
+def render_challenge_frame(frame: np.ndarray, event: GameEvent) -> None:
+    height, width = frame.shape[:2]
+    background = load_challenge_background(event.challenge_background_asset, frame.shape)
+    if background is not None:
+        cv2.addWeighted(background, 0.55, frame, 0.45, 0, frame)
+    else:
+        frame[:] = (12, 22, 12)
+        gradient = np.linspace(0, 1, width, dtype=np.float32)
+        gradient = np.tile(gradient, (height, 1))
+        frame[:, :, 1] = np.clip(frame[:, :, 1] + (gradient * 18).astype(np.uint8), 0, 255)
+
+    panel_top = 92
+    panel_bottom = height - 90
+    cv2.rectangle(frame, (40, panel_top), (width - 40, panel_bottom), (10, 28, 10), 2)
+    cv2.rectangle(frame, (46, panel_top + 6), (width - 46, panel_bottom - 6), (6, 18, 6), -1)
+
+    prompt = event.challenge_prompt or ""
+    title = event.challenge_title or ""
+    timer = max(0.0, event.timer_left)
+    round_label = f"ROUND {event.round_index}/{event.round_total}" if event.round_total else "ROUND"
+    cv2.putText(frame, round_label, (70, 132), cv2.FONT_HERSHEY_DUPLEX, 1.0, MATRIX_GREEN, 2, cv2.LINE_AA)
+    cv2.putText(frame, title.upper(), (70, 180), cv2.FONT_HERSHEY_DUPLEX, 0.95, MATRIX_GREEN, 2, cv2.LINE_AA)
+    cv2.putText(frame, prompt, (70, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.82, (190, 255, 190), 2, cv2.LINE_AA)
+    cv2.putText(frame, f"TIMER {timer:0.1f}s", (70, 280), cv2.FONT_HERSHEY_DUPLEX, 0.9, MATRIX_GREEN, 2, cv2.LINE_AA)
+
+
+def draw_hand_detections(frame: np.ndarray, hand_results, frame_width: int, frame_height: int) -> list[str]:
+    gestures: list[str] = []
 
     if hand_results.hand_landmarks and hand_results.handedness:
         for lm_list, handedness in zip(hand_results.hand_landmarks, hand_results.handedness):
@@ -104,14 +148,59 @@ def draw_hand_detections(frame: np.ndarray, hand_results, frame_width: int, fram
                 cv2.circle(frame, (cx, cy), 4, MATRIX_GREEN, -1)
 
             hand_label = handedness[0].category_name
-            local_gesture = detect_gesture(lm_list, hand_label)
-            if local_gesture != "none":
-                gesture = local_gesture
+            thumb_up, index_up, middle_up, ring_up, pinky_up = _finger_states(lm_list, hand_label)
+            local_gesture = _detect_gesture_from_states(lm_list, thumb_up, index_up, middle_up, ring_up, pinky_up)
+            gestures.append(local_gesture)
 
-    return gesture
+    return gestures
 
 
-def draw_hud(frame: np.ndarray, fps: float, persons: int, faces: int, gesture: str, status: str) -> None:
+def _finger_states(landmarks: list, hand_label: str) -> tuple[bool, bool, bool, bool, bool]:
+    thumb_tip = landmarks[4]
+    thumb_ip = landmarks[3]
+
+    index_tip, index_pip = landmarks[8], landmarks[6]
+    middle_tip, middle_pip = landmarks[12], landmarks[10]
+    ring_tip, ring_pip = landmarks[16], landmarks[14]
+    pinky_tip, pinky_pip = landmarks[20], landmarks[18]
+
+    if hand_label == "Right":
+        thumb_up = thumb_tip.x < thumb_ip.x
+    else:
+        thumb_up = thumb_tip.x > thumb_ip.x
+
+    index_up = index_tip.y < index_pip.y
+    middle_up = middle_tip.y < middle_pip.y
+    ring_up = ring_tip.y < ring_pip.y
+    pinky_up = pinky_tip.y < pinky_pip.y
+
+    return thumb_up, index_up, middle_up, ring_up, pinky_up
+
+
+def _detect_gesture_from_states(landmarks: list, thumb_up: bool, index_up: bool, middle_up: bool, ring_up: bool, pinky_up: bool) -> str:
+    thumb_tip = landmarks[4]
+    index_tip = landmarks[8]
+    dist_thumb_index = np.hypot(thumb_tip.x - index_tip.x, thumb_tip.y - index_tip.y)
+
+    if dist_thumb_index < 0.05 and middle_up and ring_up and pinky_up:
+        return "ok_sign"
+
+    if thumb_up and not index_up and not middle_up and not ring_up and not pinky_up:
+        return "thumbs_up"
+
+    if thumb_up and index_up and middle_up and ring_up and pinky_up:
+        return "open_palm"
+
+    if index_up and not middle_up and not ring_up and not pinky_up:
+        return "point"
+
+    if not thumb_up and not index_up and not middle_up and not ring_up and not pinky_up:
+        return "fist"
+
+    return "none"
+
+
+def draw_hud(frame: np.ndarray, fps: float, persons: int, faces: int, event: GameEvent) -> None:
     h, w = frame.shape[:2]
 
     cv2.rectangle(frame, (0, 0), (w, 74), HUD_BG, -1)
@@ -121,7 +210,14 @@ def draw_hud(frame: np.ndarray, fps: float, persons: int, faces: int, gesture: s
     cv2.putText(frame, f"FPS: {fps:4.1f}", (20, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
     cv2.putText(frame, f"PERSONS: {persons}", (170, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
     cv2.putText(frame, f"FACES: {faces}", (350, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
-    cv2.putText(frame, f"GESTURE: {gesture}", (500, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
+    cv2.putText(frame, f"{event.phase} | ROUND {event.round_index}/{event.round_total}", (500, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
 
-    if status:
-        cv2.putText(frame, status, (20, h - 24), cv2.FONT_HERSHEY_DUPLEX, 0.9, MATRIX_GREEN, 2, cv2.LINE_AA)
+    if event.phase == "IN_ROUND":
+        cv2.putText(frame, f"TIMER: {event.timer_left:0.1f}s", (20, h - 24), cv2.FONT_HERSHEY_DUPLEX, 0.9, MATRIX_GREEN, 2, cv2.LINE_AA)
+    elif event.phase in ("VICTORY", "GAME_OVER"):
+        cv2.putText(frame, "DEUX MAINS OUVERTES 1s POUR RESTART", (20, h - 24), cv2.FONT_HERSHEY_DUPLEX, 0.8, MATRIX_GREEN, 2, cv2.LINE_AA)
+    else:
+        cv2.putText(frame, "DEUX MAINS OUVERTES 1s POUR DEMARRER", (20, h - 24), cv2.FONT_HERSHEY_DUPLEX, 0.8, MATRIX_GREEN, 2, cv2.LINE_AA)
+
+    if event.status:
+        cv2.putText(frame, event.status, (20, h - 48), cv2.FONT_HERSHEY_DUPLEX, 0.9, MATRIX_GREEN, 2, cv2.LINE_AA)

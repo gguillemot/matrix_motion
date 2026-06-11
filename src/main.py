@@ -9,7 +9,7 @@ from ultralytics import YOLO
 from src.config import AppConfig, parse_args
 from src.game_engine import GameEngine, GameState
 from src.mqtt_client import MQTTConfig, MQTTPublisher
-from src.rendering import MatrixRain, draw_face_detections, draw_hand_detections, draw_hud, draw_yolo_detections
+from src.rendering import MatrixRain, draw_face_detections, draw_hand_detections, draw_hud, draw_yolo_detections, render_challenge_frame
 from src.tracking import YoloWorker, create_face_detector, create_hand_landmarker
 
 
@@ -45,7 +45,11 @@ def run(cfg: AppConfig) -> None:
     hand_landmarker = None
     face_detector = None
     rain = None
-    engine = GameEngine(GameState(status="SYSTEM ONLINE"))
+    engine = GameEngine(
+        sequence_length=cfg.sequence_length,
+        state=GameState(status="SYSTEM ONLINE"),
+        victory_pill=cfg.victory_pill,
+    )
 
     try:
         if not cfg.disable_yolo:
@@ -93,10 +97,12 @@ def run(cfg: AppConfig) -> None:
             cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
             persons = draw_yolo_detections(frame, cached_boxes, getattr(model, "names", {}))
             faces = draw_face_detections(frame, face_results.detections)
-            gesture = draw_hand_detections(frame, hand_results, w_frame, h_frame)
+            hand_gestures = draw_hand_detections(frame, hand_results, w_frame, h_frame)
 
             now = time.monotonic()
-            event = engine.process_gesture(gesture, now, publisher.publish_pill)
+            event = engine.update(hand_gestures, now, publisher.publish_pill)
+
+            render_challenge_frame(frame, event)
 
             rain.draw(frame, boost=event.rain_boost)
 
@@ -107,7 +113,7 @@ def run(cfg: AppConfig) -> None:
                 fps = instant_fps if fps == 0 else (0.9 * fps + 0.1 * instant_fps)
             last_tick = tick
 
-            draw_hud(frame, fps=fps, persons=persons, faces=faces, gesture=gesture, status=event.status)
+            draw_hud(frame, fps=fps, persons=persons, faces=faces, event=event)
 
             cv2.imshow(cfg.window_name, frame)
             key = cv2.waitKey(1) & 0xFF
