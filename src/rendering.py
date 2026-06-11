@@ -107,18 +107,24 @@ def load_challenge_background(asset_name: str, frame_shape: tuple[int, int, int]
 def render_challenge_frame(frame: np.ndarray, event: GameEvent) -> None:
     height, width = frame.shape[:2]
     background = load_challenge_background(event.challenge_background_asset, frame.shape)
-    if background is not None:
-        cv2.addWeighted(background, 0.55, frame, 0.45, 0, frame)
-    else:
-        frame[:] = (12, 22, 12)
-        gradient = np.linspace(0, 1, width, dtype=np.float32)
-        gradient = np.tile(gradient, (height, 1))
-        frame[:, :, 1] = np.clip(frame[:, :, 1] + (gradient * 18).astype(np.uint8), 0, 255)
-
     panel_top = 92
     panel_bottom = height - 90
-    cv2.rectangle(frame, (40, panel_top), (width - 40, panel_bottom), (10, 28, 10), 2)
-    cv2.rectangle(frame, (46, panel_top + 6), (width - 46, panel_bottom - 6), (6, 18, 6), -1)
+    panel_left = 40
+    panel_right = width - 40
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (panel_left, panel_top), (panel_right, panel_bottom), (8, 18, 8), -1)
+    cv2.rectangle(overlay, (panel_left, panel_top), (panel_right, panel_bottom), (10, 28, 10), 2)
+
+    if background is not None:
+        card_width = min(520, max(320, int(width * 0.36)))
+        card_height = min(320, max(220, int(height * 0.34)))
+        card_x = panel_left + 18
+        card_y = panel_top + 18
+        bg_card = cv2.resize(background, (card_width, card_height), interpolation=cv2.INTER_AREA)
+        overlay[card_y : card_y + card_height, card_x : card_x + card_width] = bg_card
+
+    cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
 
     prompt = event.challenge_prompt or ""
     title = event.challenge_title or ""
