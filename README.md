@@ -7,6 +7,17 @@ Real-time demo with a camera in Matrix style:
 - Fullscreen neon green HUD + Matrix rain effect
 - Optional MQTT trigger to your NodeMCU servo project
 
+## Structure
+
+- `src/main.py`: entry point that wires the app together
+- `src/config.py`: CLI and environment config
+- `src/tracking.py`: MediaPipe and YOLO setup
+- `src/game_engine.py`: gameplay state and gesture actions
+- `src/challenges.py`: gesture recognition helpers
+- `src/rendering.py`: HUD, overlays, and visual effects
+- `src/mqtt_client.py`: MQTT payload and publisher
+- `tests/`: unit tests for gestures, state transitions, and MQTT payloads
+
 ## 1) Install with uv
 
 From repository root:
@@ -21,6 +32,12 @@ Minimal run (MQTT optional):
 
 ```bash
 uv run --project matrix_motion python main.py
+```
+
+You can also launch the modular entry point directly:
+
+```bash
+uv run --project matrix_motion python -m src.main
 ```
 
 Run with MQTT enabled (recommended for NodeMCU trigger):
@@ -51,6 +68,12 @@ Payload published to MQTT:
 ```
 
 Compatible with your NodeMCU firmware payload format.
+
+## Tests
+
+```bash
+uv run --project matrix_motion python -m unittest discover -s tests
+```
 
 ## Useful options
 
