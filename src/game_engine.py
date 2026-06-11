@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import math
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Sequence
 
 from src.challenges import (
     BUNNY_HOLD_SEC,
+    DODGE_HOLD_SEC,
     PILL_HOLD_SEC,
     Challenge,
     HandObservation,
@@ -25,17 +28,22 @@ COUNTDOWN = "COUNTDOWN"
 IN_ROUND = "IN_ROUND"
 SCORE = "SCORE"
 
-# Scoring : 100 pts par figure reussie + bonus vitesse de 10 pts par seconde
-# restante au moment de la validation.
-FIGURE_POINTS = 100
-TIME_BONUS_PER_SEC = 10
+# Scoring : points = (base + bonus vitesse) x multiplicateur de combo.
+# Le bonus vitesse est lineaire sur le temps restant (max 50) ; le combo
+# compte les succes consecutifs (x1 -> x5, un echec le casse). Une partie
+# moyenne vaut ~150-400 pts, une partie parfaite et rapide ~1400 pts :
+# vraie marge de progression pour donner envie de rejouer.
+BASE_POINTS = 50
+MAX_SPEED_BONUS = 50
+MAX_COMBO = 5
 
 # 2 paumes ouvertes maintenues 1 s pour (re)lancer une partie : zero
 # calibration, demarre de loin, et tres peu de faux positifs.
 START_HOLD_SEC = 1.0
-# Pause entre deux figures : le temps d'afficher le flash de succes/echec.
-ROUND_TRANSITION_SEC = 1.2
-FLASH_DURATION_SEC = 1.2
+# Pause entre deux figures : fenetre de celebration ou l'effet visuel de
+# recompense se joue, avant la figure suivante.
+ROUND_TRANSITION_SEC = 2.4
+FLASH_DURATION_SEC = 2.2
 
 TIMEOUT_MESSAGE = "TOO SLOW..."
 
@@ -60,6 +68,11 @@ class GameState:
     chosen_pill: str | None = None
     start_hold_since: float | None = None
     score_published: bool = False
+    combo: int = 0
+    celebration_key: str = ""
+    celebration_started_at: float = 0.0
+    celebration_until: float = 0.0
+    new_record: bool = False
     round_results: list[RoundResult] = field(default_factory=list)
 
 
@@ -85,6 +98,11 @@ class GameEvent:
     start_hold_progress: float = 0.0
     chosen_pill: str | None = None
     rain_boost: bool = False
+    combo: int = 0
+    celebration_key: str = ""
+    celebration_progress: float = 0.0  # 0 -> 1 sur la fenetre de celebration
+    best_score: int = 0
+    new_record: bool = False
     round_results: list[RoundResult] = field(default_factory=list)
     published: bool = False
 
@@ -104,6 +122,7 @@ class GameEngine:
         campaign: list[Challenge] | None = None,
         rng: random.Random | None = None,
         state: GameState | None = None,
+        best_score_path: str | Path | None = None,
     ) -> None:
         self.state = state or GameState()
         self.round_duration = round_duration
@@ -112,9 +131,12 @@ class GameEngine:
         self._rng = rng or random.Random()
         self._fixed_campaign = campaign
         self.challenges: list[Challenge] = list(campaign) if campaign else build_breizhcamp_campaign(self._rng)
+        self._best_score_path = Path(best_score_path) if best_score_path else None
+        self.best_score = self._load_best_score()
 
         self._pill_hold = HoldTracker(PILL_HOLD_SEC)
         self._bunny_hold = HoldTracker(BUNNY_HOLD_SEC)
+        self._dodge_hold = HoldTracker(DODGE_HOLD_SEC)
         self._spoon = SpoonTracker()
         self._scan = ScanTracker()
         self._figure_progress = 0.0
@@ -140,6 +162,10 @@ class GameEngine:
         state.flash_message = ""
         state.flash_until = 0.0
         state.start_hold_since = None
+        state.combo = 0
+        state.celebration_key = ""
+        state.celebration_until = 0.0
+        state.new_record = False
 
     def update(
         self,
@@ -171,16 +197,24 @@ class GameEngine:
 
         if now >= state.round_deadline:
             state.round_results.append(RoundResult(challenge.title, False, 0))
+            state.combo = 0  # un echec casse le combo
             self._set_flash(TIMEOUT_MESSAGE, now)
             published = self._advance(now, publish_pill)
             return self._snapshot(published=published)
 
         success, message = self._detect_figure(challenge, hands, pose, now)
         if success:
-            points = FIGURE_POINTS + int(max(0.0, state.round_deadline - now)) * TIME_BONUS_PER_SEC
+            state.combo = min(MAX_COMBO, state.combo + 1)
+            timer_ratio = max(0.0, state.round_deadline - now) / self.round_duration
+            points = (BASE_POINTS + int(MAX_SPEED_BONUS * timer_ratio)) * state.combo
             state.score += points
             state.round_results.append(RoundResult(challenge.title, True, points))
+            if state.combo > 1:
+                message = f"{message}  COMBO x{state.combo}"
             self._set_flash(message, now)
+            state.celebration_key = challenge.key
+            state.celebration_started_at = now
+            state.celebration_until = now + ROUND_TRANSITION_SEC
             published = self._advance(now, publish_pill)
             return self._snapshot(published=published)
 
@@ -209,6 +243,7 @@ class GameEngine:
     def _reset_round_trackers(self) -> None:
         self._pill_hold.reset()
         self._bunny_hold.reset()
+        self._dodge_hold.reset()
         self._spoon.reset()
         self._scan.reset()
         self._figure_progress = 0.0
@@ -227,7 +262,12 @@ class GameEngine:
         self._pill_hover = None
 
         if challenge.kind == "dodge":
-            return dodge_matches(pose), message
+            # Posture tenue DODGE_HOLD_SEC : le joueur a le temps de se voir
+            # en esquive, pas de validation sur un simple passage.
+            active = dodge_matches(pose)
+            validated, progress = self._dodge_hold.update("dodge" if active else None, now)
+            self._figure_progress = progress
+            return validated is not None, message
 
         if challenge.kind == "pill":
             hover = pill_hover(hands)
@@ -263,6 +303,10 @@ class GameEngine:
         if state.round_index >= len(self.challenges):
             state.phase = SCORE
             state.start_hold_since = None
+            if state.score > self.best_score:
+                self.best_score = state.score
+                state.new_record = True
+                self._save_best_score()
             if not state.score_published:
                 state.score_published = True
                 pill = state.chosen_pill or (self.victory_pill if self.victory_pill != "auto" else "blue")
@@ -277,6 +321,22 @@ class GameEngine:
     def _set_flash(self, message: str, now: float) -> None:
         self.state.flash_message = message
         self.state.flash_until = now + FLASH_DURATION_SEC
+
+    def _load_best_score(self) -> int:
+        if self._best_score_path is None or not self._best_score_path.exists():
+            return 0
+        try:
+            return int(json.loads(self._best_score_path.read_text()).get("best_score", 0))
+        except (ValueError, OSError, AttributeError):
+            return 0
+
+    def _save_best_score(self) -> None:
+        if self._best_score_path is None:
+            return
+        try:
+            self._best_score_path.write_text(json.dumps({"best_score": self.best_score}))
+        except OSError as exc:
+            print(f"[SCORE] could not persist best score: {exc}")
 
     def _snapshot(self, published: bool = False) -> GameEvent:
         state = self.state
@@ -300,6 +360,13 @@ class GameEngine:
         if state.start_hold_since is not None:
             start_hold_progress = min(1.0, (now - state.start_hold_since) / START_HOLD_SEC)
 
+        celebration_key = ""
+        celebration_progress = 0.0
+        if state.celebration_key and now < state.celebration_until:
+            celebration_key = state.celebration_key
+            window = max(1e-6, state.celebration_until - state.celebration_started_at)
+            celebration_progress = min(1.0, max(0.0, (now - state.celebration_started_at) / window))
+
         return GameEvent(
             phase=state.phase,
             score=state.score,
@@ -321,6 +388,11 @@ class GameEngine:
             start_hold_progress=start_hold_progress,
             chosen_pill=state.chosen_pill,
             rain_boost=state.phase in (ATTRACT, SCORE) or bool(flash),
+            combo=state.combo,
+            celebration_key=celebration_key,
+            celebration_progress=celebration_progress,
+            best_score=self.best_score,
+            new_record=state.new_record,
             round_results=list(state.round_results),
             published=published,
         )

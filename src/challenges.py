@@ -22,8 +22,10 @@ HAND_CONNECTIONS = [
 # The Neo Dodge : offset lateral du nez par rapport au centre des epaules,
 # normalise par l'envergure d'epaules. 0.30 impose de pencher franchement le
 # buste et la tete (0.22, l'ancien seuil, se declenchait sur un simple
-# mouvement de tete).
+# mouvement de tete). La posture doit etre TENUE 0.5 s : le joueur a le temps
+# de se voir en esquive, et pas de validation au passage.
 DODGE_OFFSET_THRESHOLD = 0.30
+DODGE_HOLD_SEC = 0.5
 
 # Red Pill / Blue Pill : centres des pilules affichees en overlay (x, y
 # normalises, rouge a gauche / bleue a droite dans l'image miroir) et rayon
@@ -31,19 +33,20 @@ DODGE_OFFSET_THRESHOLD = 0.30
 # genereux : sur un stand, on valide l'intention, pas la precision.
 PILL_ZONES: dict[str, tuple[float, float]] = {"red": (0.30, 0.42), "blue": (0.70, 0.42)}
 PILL_HITBOX_RADIUS = 0.13
-# Maintien de la paume sur la pilule : 0.4 s evite de valider une main qui ne
-# fait que passer devant la zone.
-PILL_HOLD_SEC = 0.4
+# Maintien de la paume sur la pilule : 0.9 s pour laisser le temps de voir la
+# jauge se remplir et eviter de valider une main qui ne fait que passer.
+PILL_HOLD_SEC = 0.9
 
 # Follow the White Rabbit : deux mains en "oreilles" (index + majeur leves,
 # annulaire + auriculaire plies) avec le centre des paumes au-dessus du nez.
-BUNNY_HOLD_SEC = 0.4
+BUNNY_HOLD_SEC = 0.9
 
 # There Is No Spoon : pince pouce-index (distance < 0.06, soit environ la
 # largeur d'un doigt) qui tient la cuillere virtuelle, puis rotation cumulee
-# du vecteur poignet -> base du majeur jusqu'a 45 degres.
+# du vecteur poignet -> base du majeur jusqu'a 80 degres : on a le temps de
+# voir la cuillere se tordre.
 SPOON_PINCH_MAX_DIST = 0.06
-SPOON_BEND_TARGET_RAD = math.radians(45.0)
+SPOON_BEND_TARGET_RAD = math.radians(80.0)
 # Au-dela de ~35 deg entre deux frames c'est un saut de tracking, pas une
 # rotation du joueur : on l'ignore pour ne pas gonfler le cumul.
 SPOON_MAX_STEP_RAD = 0.6

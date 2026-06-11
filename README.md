@@ -12,7 +12,11 @@ Real-time demo with a camera in Matrix style:
 
 State machine : `ATTRACT` (ecran d'accueil) -> `COUNTDOWN` (3, 2, 1) -> `IN_ROUND` (5 figures, ordre aleatoire) -> `SCORE`.
 
-Demarrage : montrer **2 paumes ouvertes pendant 1 s** face a la camera (zero calibration). Une figure ratee (temps ecoule) passe simplement a la suivante avec 0 point : la partie se termine toujours sur l'ecran de score. Scoring : **100 pts par figure + 10 pts par seconde restante**.
+Demarrage : montrer **2 paumes ouvertes pendant 1 s** face a la camera (zero calibration). Une figure ratee (temps ecoule) passe simplement a la suivante avec 0 point : la partie se termine toujours sur l'ecran de score.
+
+Scoring : `points = (50 + bonus vitesse jusqu'a 50) x combo`. Le **combo** (x1 a x5) compte les figures reussies d'affilee, un echec le casse. Partie moyenne ~150-400 pts, partie parfaite et rapide ~1400 pts. Le **meilleur score du jour** est persiste dans `highscore.json` et affiche sur l'ecran d'accueil (`BEST TODAY`) ; le battre declenche `NEW RECORD !`.
+
+Chaque figure reussie declenche un **effet de recompense** (~2.4 s) : bullet-time avec rejeu au ralenti et vignette noire (dodge), teinte rouge/bleue plein ecran (pilule), pluie blanche + lapin bondissant (white rabbit), distorsion de la realite (cuillere), glitch numerique (Smith).
 
 Les 5 figures (seuils geometriques documentes dans `src/challenges.py`) :
 

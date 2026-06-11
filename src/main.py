@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 
 import cv2
 import mediapipe as mp
+import numpy as np
 from ultralytics import YOLO
 
-from src.config import AppConfig, parse_args
+from src.config import PROJECT_ROOT, AppConfig, parse_args
 from src.challenges import observe_hands, observe_pose
 from src.game_engine import ATTRACT, COUNTDOWN, IN_ROUND, SCORE, GameEngine
 from src.mqtt_client import MQTTConfig, MQTTPublisher
@@ -14,6 +16,7 @@ from src.rendering import (
     MatrixRain,
     draw_agent_glasses,
     draw_attract_screen,
+    draw_celebration,
     draw_countdown,
     draw_face_detections,
     draw_flash,
@@ -66,6 +69,7 @@ def run(cfg: AppConfig) -> None:
         round_duration=cfg.round_duration,
         countdown_duration=cfg.countdown_duration,
         victory_pill=cfg.victory_pill,
+        best_score_path=PROJECT_ROOT / "highscore.json",
     )
 
     try:
@@ -93,6 +97,13 @@ def run(cfg: AppConfig) -> None:
         last_tick = time.perf_counter()
         fps = 0.0
 
+        # Bullet-time : on garde les ~24 dernieres frames propres pour les
+        # rejouer au ralenti quand le Neo Dodge est reussi.
+        frame_buffer: deque[np.ndarray] = deque(maxlen=24)
+        replay_frames: list[np.ndarray] = []
+        replay_pos = 0.0
+        bullet_time_active = False
+
         while True:
             ok, frame = cap.read()
             if not ok:
@@ -100,6 +111,7 @@ def run(cfg: AppConfig) -> None:
 
             frame = cv2.flip(frame, 1)
             frame_idx += 1
+            frame_buffer.append(frame.copy())
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             timestamp_ms = int((time.perf_counter() - video_start_ts) * 1000)
@@ -120,37 +132,65 @@ def run(cfg: AppConfig) -> None:
             if event.published:
                 print(f"[MQTT] pill published: {event.chosen_pill or 'default'}")
 
-            # Les boites YOLO ne sont dessinees qu'en attract : pendant la
-            # partie, elles parasitent la lecture des figures.
-            cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
-            persons = draw_yolo_detections(
-                frame, cached_boxes, getattr(model, "names", {}), draw=event.phase == ATTRACT
-            )
-
-            scanning = event.phase == IN_ROUND and event.challenge_kind == "scan"
-            if scanning:
-                faces = draw_agent_glasses(frame, face_results.detections, event.figure_progress)
+            # Bullet-time : au debut de la celebration du dodge, on fige le
+            # buffer ; tant qu'il reste des frames, on les rejoue ~2.5x plus
+            # lentement pendant que camera et moteur continuent de tourner.
+            if event.celebration_key == "neo_dodge":
+                if not bullet_time_active:
+                    bullet_time_active = True
+                    replay_frames = list(frame_buffer)
+                    replay_pos = 0.0
             else:
-                faces = draw_face_detections(frame, face_results.detections)
+                bullet_time_active = False
+                replay_frames = []
 
-            draw_hand_detections(frame, hand_results, w_frame, h_frame)
-            poses = draw_pose_skeleton(frame, pose_results, w_frame, h_frame)
+            replay_frame = None
+            if bullet_time_active and int(replay_pos) < len(replay_frames):
+                replay_frame = replay_frames[int(replay_pos)].copy()
+                replay_pos += 0.4
 
-            if event.phase == ATTRACT:
-                draw_attract_screen(frame, event)
-            elif event.phase == COUNTDOWN:
-                draw_countdown(frame, event)
-            elif event.phase == IN_ROUND:
-                draw_round_overlay(frame, event)
-                if event.challenge_kind == "pill":
-                    draw_pills(frame, event)
-                elif event.challenge_kind == "spoon":
-                    draw_spoon(frame, event)
-            elif event.phase == SCORE:
-                draw_score_screen(frame, event)
+            cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
 
-            rain.draw(frame, boost=event.rain_boost)
-            draw_flash(frame, event)
+            if replay_frame is not None:
+                # Pendant le rejeu : pas d'overlays de detection ni d'ecran de
+                # round, juste l'effet bullet-time sur les frames du passe.
+                display = replay_frame
+                persons = draw_yolo_detections(display, cached_boxes, getattr(model, "names", {}), draw=False)
+                faces = len(face_results.detections or [])
+                poses = len(pose_results.pose_landmarks or [])
+            else:
+                display = frame
+                # Les boites YOLO ne sont dessinees qu'en attract : pendant la
+                # partie, elles parasitent la lecture des figures.
+                persons = draw_yolo_detections(
+                    display, cached_boxes, getattr(model, "names", {}), draw=event.phase == ATTRACT
+                )
+
+                scanning = event.phase == IN_ROUND and event.challenge_kind == "scan"
+                if scanning:
+                    faces = draw_agent_glasses(display, face_results.detections, event.figure_progress)
+                else:
+                    faces = draw_face_detections(display, face_results.detections)
+
+                draw_hand_detections(display, hand_results, w_frame, h_frame)
+                poses = draw_pose_skeleton(display, pose_results, w_frame, h_frame)
+
+                if event.phase == ATTRACT:
+                    draw_attract_screen(display, event)
+                elif event.phase == COUNTDOWN:
+                    draw_countdown(display, event)
+                elif event.phase == IN_ROUND:
+                    draw_round_overlay(display, event)
+                    if event.challenge_kind == "pill":
+                        draw_pills(display, event)
+                    elif event.challenge_kind == "spoon":
+                        draw_spoon(display, event)
+                elif event.phase == SCORE:
+                    draw_score_screen(display, event)
+
+            draw_celebration(display, event)
+            rain.draw(display, boost=event.rain_boost, white=event.celebration_key == "white_rabbit")
+            draw_flash(display, event)
 
             tick = time.perf_counter()
             dt = tick - last_tick
@@ -159,9 +199,9 @@ def run(cfg: AppConfig) -> None:
                 fps = instant_fps if fps == 0 else (0.9 * fps + 0.1 * instant_fps)
             last_tick = tick
 
-            draw_hud(frame, fps=fps, persons=persons, faces=faces, poses=poses, event=event)
+            draw_hud(display, fps=fps, persons=persons, faces=faces, poses=poses, event=event)
 
-            cv2.imshow(cfg.window_name, frame)
+            cv2.imshow(cfg.window_name, display)
             key = cv2.waitKey(1) & 0xFF
 
             if key in (ord("q"), 27):

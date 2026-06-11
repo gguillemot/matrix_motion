@@ -5,3 +5,4 @@ yolov8n.pt
 hand_landmarker.task
 pose_landmarker_lite.task
 face_detector.tflite
+highscore.json
