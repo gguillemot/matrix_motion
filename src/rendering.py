@@ -294,34 +294,68 @@ def draw_pills(frame: np.ndarray, event: GameEvent) -> None:
 def draw_spoon(frame: np.ndarray, event: GameEvent) -> None:
     height, width = frame.shape[:2]
 
-    if event.spoon_anchor is None:
-        if _blink(0.8):
-            _put_centered(frame, "PINCE POUCE + INDEX POUR TENIR LA CUILLERE", height - 90, 0.8, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
-        return
-
-    anchor_x = int(event.spoon_anchor[0] * width)
-    anchor_y = int(event.spoon_anchor[1] * height)
-    # La cuillere part de la pince, a l'oppose des doigts.
-    direction = event.spoon_angle + math.pi
+    # Cuillere geante fixe au centre : le joueur la tord "par telekinesie" en
+    # pincant et tournant sa main, comme l'enfant de l'Oracle. Toujours
+    # visible pendant la figure, lisible de loin sur le stand.
+    length = int(height * 0.42)
+    base_x = width // 2
+    base_y = int(height * 0.80)  # bas du manche, fixe
     bend = event.figure_progress
-    length = 140
-    steps = 12
+    steps = 16
 
-    points = []
+    points: list[tuple[int, int]] = []
     for i in range(steps + 1):
         t = i / steps
-        # Courbure quadratique : le manche se tord de plus en plus vers le bout.
-        offset = bend * 70 * t * t
-        px = anchor_x + math.cos(direction) * length * t - math.sin(direction) * offset
-        py = anchor_y + math.sin(direction) * length * t + math.cos(direction) * offset
-        points.append((int(px), int(py)))
+        # Le bas du manche reste droit, la moitie haute se courbe de plus en
+        # plus (offset quadratique, max ~35 % de la longueur).
+        curve = max(0.0, t - 0.45) / 0.55
+        offset = bend * 0.35 * length * curve * curve
+        points.append((int(base_x + offset), int(base_y - length * t)))
 
-    cv2.polylines(frame, [np.array(points, dtype=np.int32)], False, (200, 200, 210), 7, cv2.LINE_AA)
-    cv2.polylines(frame, [np.array(points, dtype=np.int32)], False, (245, 245, 250), 3, cv2.LINE_AA)
-    # Cuilleron au bout du manche
+    pts = np.array(points, dtype=np.int32)
+    cv2.polylines(frame, [pts], False, (60, 60, 70), 22, cv2.LINE_AA)  # contour sombre
+    cv2.polylines(frame, [pts], False, (210, 210, 220), 14, cv2.LINE_AA)  # corps metal
+    cv2.polylines(frame, [pts], False, (255, 255, 255), 4, cv2.LINE_AA)  # reflet
+
+    # Cuilleron au sommet, oriente selon la torsion du bout du manche
     tip_x, tip_y = points[-1]
-    cv2.ellipse(frame, (tip_x, tip_y), (22, 30), math.degrees(direction), 0, 360, (220, 220, 230), -1)
-    cv2.ellipse(frame, (tip_x, tip_y), (22, 30), math.degrees(direction), 0, 360, (160, 160, 170), 2)
+    prev_x, prev_y = points[-2]
+    tip_angle = math.degrees(math.atan2(tip_y - prev_y, tip_x - prev_x)) + 90
+    bowl_axes = (int(height * 0.06), int(height * 0.085))
+    cv2.ellipse(frame, (tip_x, tip_y), bowl_axes, tip_angle, 0, 360, (60, 60, 70), -1)
+    cv2.ellipse(frame, (tip_x, tip_y), (bowl_axes[0] - 5, bowl_axes[1] - 5), tip_angle, 0, 360, (225, 225, 235), -1)
+    cv2.ellipse(
+        frame,
+        (tip_x - bowl_axes[0] // 3, tip_y - bowl_axes[1] // 3),
+        (bowl_axes[0] // 3, bowl_axes[1] // 4),
+        tip_angle,
+        0,
+        360,
+        (255, 255, 255),
+        -1,
+    )
+
+    if event.spoon_anchor is None:
+        if _blink(0.8):
+            _put_centered(frame, "PINCE POUCE + INDEX ET TOURNE LA MAIN", height - 90, 0.85, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
+        return
+
+    # Rayon de telekinesie : main pincee -> cuillere
+    hand_x = int(event.spoon_anchor[0] * width)
+    hand_y = int(event.spoon_anchor[1] * height)
+    mid_y = base_y - length // 2
+    cv2.line(frame, (hand_x, hand_y), (base_x, mid_y), MATRIX_GREEN, 2, cv2.LINE_AA)
+    cv2.circle(frame, (hand_x, hand_y), 12, MATRIX_GREEN, 2)
+    cv2.putText(
+        frame,
+        f"{int(bend * 100)}%",
+        (base_x + int(height * 0.09), mid_y),
+        cv2.FONT_HERSHEY_DUPLEX,
+        1.0,
+        MATRIX_GREEN,
+        2,
+        cv2.LINE_AA,
+    )
 
 
 def draw_agent_glasses(frame: np.ndarray, detections, progress: float) -> int:
@@ -334,23 +368,13 @@ def draw_agent_glasses(frame: np.ndarray, detections, progress: float) -> int:
         bb = det.bounding_box
         x, y, bw, bh = bb.origin_x, bb.origin_y, bb.width, bb.height
 
-        # Lunettes d'agent : deux verres noirs + branches, calees sur la bbox.
-        eye_y = y + int(0.38 * bh)
-        eye_dx = int(0.22 * bw)
-        eye_axes = (max(6, int(0.15 * bw)), max(4, int(0.10 * bh)))
-        left_eye = (x + bw // 2 - eye_dx, eye_y)
-        right_eye = (x + bw // 2 + eye_dx, eye_y)
-        for center in (left_eye, right_eye):
-            cv2.ellipse(frame, center, eye_axes, 0, 0, 360, (20, 20, 20), -1)
-            cv2.ellipse(frame, center, eye_axes, 0, 0, 360, (90, 90, 90), 2)
-        cv2.line(frame, (left_eye[0] + eye_axes[0], eye_y), (right_eye[0] - eye_axes[0], eye_y), (20, 20, 20), 3)
-        cv2.line(frame, (x, eye_y), (left_eye[0] - eye_axes[0], eye_y), (20, 20, 20), 3)
-        cv2.line(frame, (right_eye[0] + eye_axes[0], eye_y), (x + bw, eye_y), (20, 20, 20), 3)
-
-        # Ligne de scan animee par la progression d'immobilite
-        scan_y = y + int(progress * bh)
-        cv2.line(frame, (x, scan_y), (x + bw, scan_y), MATRIX_GREEN, 2)
+        # Cadre + consigne toujours visibles pour signaler la figure active
         cv2.rectangle(frame, (x, y), (x + bw, y + bh), MATRIX_DARK_GREEN, 1)
+        if progress <= 0.0:
+            if _blink(0.5):
+                cv2.putText(frame, "DON'T MOVE", (x, max(20, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (60, 60, 255), 2, cv2.LINE_AA)
+            continue
+
         cv2.putText(
             frame,
             f"SCANNING {int(progress * 100)}%",
@@ -361,6 +385,29 @@ def draw_agent_glasses(frame: np.ndarray, detections, progress: float) -> int:
             2,
             cv2.LINE_AA,
         )
+
+        # Les lunettes sont la recompense de l'immobilite : elles apparaissent
+        # en fondu (opacite = progression du scan) et disparaissent des que le
+        # joueur bouge. Opacite totale = victoire.
+        overlay = frame.copy()
+        eye_y = y + int(0.38 * bh)
+        eye_dx = int(0.22 * bw)
+        eye_axes = (max(6, int(0.15 * bw)), max(4, int(0.10 * bh)))
+        left_eye = (x + bw // 2 - eye_dx, eye_y)
+        right_eye = (x + bw // 2 + eye_dx, eye_y)
+        for center in (left_eye, right_eye):
+            cv2.ellipse(overlay, center, eye_axes, 0, 0, 360, (20, 20, 20), -1)
+            cv2.ellipse(overlay, center, eye_axes, 0, 0, 360, (90, 90, 90), 2)
+        cv2.line(overlay, (left_eye[0] + eye_axes[0], eye_y), (right_eye[0] - eye_axes[0], eye_y), (20, 20, 20), 3)
+        cv2.line(overlay, (x, eye_y), (left_eye[0] - eye_axes[0], eye_y), (20, 20, 20), 3)
+        cv2.line(overlay, (right_eye[0] + eye_axes[0], eye_y), (x + bw, eye_y), (20, 20, 20), 3)
+
+        # Ligne de scan animee par la progression d'immobilite
+        scan_y = y + int(progress * bh)
+        cv2.line(overlay, (x, scan_y), (x + bw, scan_y), MATRIX_GREEN, 2)
+
+        alpha = min(1.0, progress)
+        cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
 
     return faces
 

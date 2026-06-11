@@ -48,11 +48,11 @@ SPOON_BEND_TARGET_RAD = math.radians(45.0)
 # rotation du joueur : on l'ignore pour ne pas gonfler le cumul.
 SPOON_MAX_STEP_RAD = 0.6
 
-# Agent Smith : immobilite totale. Le nez ne doit pas deriver de plus de 10 %
-# de l'envergure d'epaules (~3 % de l'image) autour de sa position de
-# reference pendant SCAN_HOLD_SEC : tolere le jitter du tracker, detecte tout
-# mouvement volontaire.
-SCAN_MAX_DRIFT_RATIO = 0.10
+# Agent Smith : immobilite totale. Le nez ne doit pas deriver de plus de 8 %
+# de l'envergure d'epaules (~2.5 % de l'image) autour de sa position de
+# reference pendant SCAN_HOLD_SEC : tolere juste le jitter du tracker, le
+# moindre mouvement volontaire fait disparaitre les lunettes et relance le scan.
+SCAN_MAX_DRIFT_RATIO = 0.08
 SCAN_HOLD_SEC = 2.0
 
 
@@ -265,7 +265,7 @@ def build_campaign(sequence_length: int) -> list[Challenge]:
 # ---------------------------------------------------------------------------
 
 
-def finger_states(landmarks: list, hand_label: str) -> tuple[bool, bool, bool, bool, bool]:
+def finger_states(landmarks: list) -> tuple[bool, bool, bool, bool, bool]:
     thumb_tip = landmarks[4]
     thumb_ip = landmarks[3]
 
@@ -274,10 +274,15 @@ def finger_states(landmarks: list, hand_label: str) -> tuple[bool, bool, bool, b
     ring_tip, ring_pip = landmarks[16], landmarks[14]
     pinky_tip, pinky_pip = landmarks[20], landmarks[18]
 
-    if hand_label == "Right":
-        thumb_up = thumb_tip.x < thumb_ip.x
-    else:
-        thumb_up = thumb_tip.x > thumb_ip.x
+    # Pouce : test geometrique auto-reference. L'image est passee en miroir
+    # (cv2.flip) AVANT MediaPipe, donc le label Right/Left est inverse et ne
+    # peut pas servir. Le pouce est etendu s'il pointe du cote de l'index,
+    # c'est-a-dire si (thumb_tip - thumb_ip) suit la direction auriculaire ->
+    # index de la main elle-meme : insensible au miroir, a la lateralite et
+    # au cote montre (paume ou revers).
+    hand_dir_x = landmarks[5].x - landmarks[17].x
+    hand_dir_y = landmarks[5].y - landmarks[17].y
+    thumb_up = (thumb_tip.x - thumb_ip.x) * hand_dir_x + (thumb_tip.y - thumb_ip.y) * hand_dir_y > 0
 
     index_up = index_tip.y < index_pip.y
     middle_up = middle_tip.y < middle_pip.y
@@ -287,8 +292,8 @@ def finger_states(landmarks: list, hand_label: str) -> tuple[bool, bool, bool, b
     return thumb_up, index_up, middle_up, ring_up, pinky_up
 
 
-def detect_gesture(landmarks: list, hand_label: str) -> str:
-    thumb_up, index_up, middle_up, ring_up, pinky_up = finger_states(landmarks, hand_label)
+def detect_gesture(landmarks: list) -> str:
+    thumb_up, index_up, middle_up, ring_up, pinky_up = finger_states(landmarks)
 
     thumb_tip = landmarks[4]
     index_tip = landmarks[8]
@@ -320,10 +325,9 @@ def detect_gesture(landmarks: list, hand_label: str) -> str:
 def classify_hand_gestures(hand_results) -> list[str]:
     gestures: list[str] = []
 
-    if hand_results.hand_landmarks and hand_results.handedness:
-        for lm_list, handedness in zip(hand_results.hand_landmarks, hand_results.handedness):
-            hand_label = handedness[0].category_name
-            gestures.append(detect_gesture(lm_list, hand_label))
+    if hand_results.hand_landmarks:
+        for lm_list in hand_results.hand_landmarks:
+            gestures.append(detect_gesture(lm_list))
 
     return gestures
 
@@ -332,10 +336,9 @@ def observe_hands(hand_results) -> list[HandObservation]:
     """Construit les observations de mains (geste + position + pince + angle)."""
     observations: list[HandObservation] = []
 
-    if hand_results.hand_landmarks and hand_results.handedness:
-        for lm_list, handedness in zip(hand_results.hand_landmarks, hand_results.handedness):
-            hand_label = handedness[0].category_name
-            gesture = detect_gesture(lm_list, hand_label)
+    if hand_results.hand_landmarks:
+        for lm_list in hand_results.hand_landmarks:
+            gesture = detect_gesture(lm_list)
 
             wrist, index_mcp, middle_mcp, pinky_mcp = lm_list[0], lm_list[5], lm_list[9], lm_list[17]
             palm_x = (wrist.x + index_mcp.x + pinky_mcp.x) / 3.0
