@@ -21,8 +21,10 @@ Les 5 figures (seuils geometriques documentes dans `src/challenges.py`) :
 | The Neo Dodge | Pencher fortement buste + tete sur le cote | Offset nez / centre des epaules >= 30 % de l'envergure d'epaules |
 | Red Pill / Blue Pill | Attraper une des 2 pilules affichees avec la paume ouverte | Paume dans la hitbox 0.4 s — **la pilule choisie part en MQTT** |
 | Follow the White Rabbit | Oreilles de lapin (index + majeur) au-dessus de la tete | 2 mains `bunny_ears` au-dessus du nez, 0.4 s |
-| There Is No Spoon | Pincer la cuillere virtuelle et tourner la main | Pince pouce-index + rotation cumulee >= 45° |
-| Agent Smith | Ne plus bouger pendant le scan (lunettes overlay) | Nez immobile (< 10 % de l'envergure d'epaules) pendant 2 s |
+| There Is No Spoon | Tordre par "telekinesie" la cuillere geante au centre de l'ecran : pincer pouce-index et tourner la main | Pince pouce-index + rotation cumulee >= 45° |
+| Agent Smith | Ne plus bouger du tout : les lunettes d'agent apparaissent en fondu avec l'immobilite, opacite totale = gagne | Nez immobile (< 8 % de l'envergure d'epaules) pendant 2 s |
+
+La detection de main ouverte est independante du miroir camera et accepte paume comme revers (test geometrique du pouce par rapport a la direction de la main, voir `finger_states` dans `src/challenges.py`).
 
 Reglages : `--round-duration 8.0` (temps par figure), `--countdown-duration 3.0`. Sur le stand, lancer avec `--disable-yolo` pour maximiser les FPS.
 

@@ -42,25 +42,57 @@ def hand_obs(
     return HandObservation(gesture=gesture, palm_x=palm_x, palm_y=palm_y, is_pinch=is_pinch, hand_angle=hand_angle)
 
 
+def open_palm_hand() -> list[SimpleNamespace]:
+    """Paume ouverte : direction auriculaire->index vers la gauche (lm[5] < lm[17]),
+    pouce etendu dans le meme sens, 4 doigts leves."""
+    landmarks = blank_hand()
+    landmarks[5].x = 0.3
+    landmarks[17].x = 0.7
+    landmarks[3].x = 0.2
+    landmarks[4].x = 0.1
+    landmarks[6].y = 0.6
+    landmarks[8].y = 0.4
+    landmarks[10].y = 0.6
+    landmarks[12].y = 0.4
+    landmarks[14].y = 0.6
+    landmarks[16].y = 0.4
+    landmarks[18].y = 0.6
+    landmarks[20].y = 0.4
+    return landmarks
+
+
 class GestureTests(unittest.TestCase):
     def test_detects_open_palm(self) -> None:
-        landmarks = blank_hand()
-        landmarks[3].x = 0.2
-        landmarks[4].x = 0.1
-        landmarks[6].y = 0.6
-        landmarks[8].y = 0.4
-        landmarks[10].y = 0.6
-        landmarks[12].y = 0.4
-        landmarks[14].y = 0.6
-        landmarks[16].y = 0.4
-        landmarks[18].y = 0.6
-        landmarks[20].y = 0.4
+        landmarks = open_palm_hand()
 
-        self.assertEqual(finger_states(landmarks, "Right"), (True, True, True, True, True))
-        self.assertEqual(detect_gesture(landmarks, "Right"), "open_palm")
+        self.assertEqual(finger_states(landmarks), (True, True, True, True, True))
+        self.assertEqual(detect_gesture(landmarks), "open_palm")
+
+    def test_open_palm_is_mirror_invariant(self) -> None:
+        # Le flux camera est en miroir : la detection doit etre identique si
+        # tous les x sont inverses (x -> 1 - x).
+        landmarks = open_palm_hand()
+        for lm in landmarks:
+            lm.x = 1.0 - lm.x
+
+        self.assertEqual(detect_gesture(landmarks), "open_palm")
+
+    def test_open_palm_detected_on_back_of_hand(self) -> None:
+        # Revers de main : la direction auriculaire->index est inversee, le
+        # pouce aussi. La main ouverte doit rester detectee (choix stand :
+        # paume OU revers acceptes).
+        landmarks = open_palm_hand()
+        landmarks[5].x = 0.7
+        landmarks[17].x = 0.3
+        landmarks[3].x = 0.8
+        landmarks[4].x = 0.9
+
+        self.assertEqual(detect_gesture(landmarks), "open_palm")
 
     def test_detects_thumbs_up(self) -> None:
         landmarks = blank_hand()
+        landmarks[5].x = 0.3
+        landmarks[17].x = 0.7
         landmarks[3].x = 0.2
         landmarks[4].x = 0.1
         landmarks[6].y = 0.6
@@ -72,10 +104,13 @@ class GestureTests(unittest.TestCase):
         landmarks[18].y = 0.6
         landmarks[20].y = 0.7
 
-        self.assertEqual(detect_gesture(landmarks, "Right"), "thumbs_up")
+        self.assertEqual(detect_gesture(landmarks), "thumbs_up")
 
     def test_detects_fist(self) -> None:
         landmarks = blank_hand()
+        # Pouce replie : il pointe a l'oppose de la direction auriculaire->index.
+        landmarks[5].x = 0.3
+        landmarks[17].x = 0.7
         landmarks[3].x = 0.2
         landmarks[4].x = 0.3
         landmarks[6].y = 0.4
@@ -87,7 +122,7 @@ class GestureTests(unittest.TestCase):
         landmarks[18].y = 0.4
         landmarks[20].y = 0.6
 
-        self.assertEqual(detect_gesture(landmarks, "Right"), "fist")
+        self.assertEqual(detect_gesture(landmarks), "fist")
 
     def test_detects_point(self) -> None:
         landmarks = blank_hand()
@@ -102,7 +137,7 @@ class GestureTests(unittest.TestCase):
         landmarks[18].y = 0.7
         landmarks[20].y = 0.8
 
-        self.assertEqual(detect_gesture(landmarks, "Right"), "point")
+        self.assertEqual(detect_gesture(landmarks), "point")
 
     def test_detects_bunny_ears(self) -> None:
         # Index + majeur leves, annulaire + auriculaire plies, pouce replie.
@@ -118,13 +153,15 @@ class GestureTests(unittest.TestCase):
         landmarks[18].y = 0.7
         landmarks[20].y = 0.8
 
-        self.assertEqual(detect_gesture(landmarks, "Right"), "bunny_ears")
+        self.assertEqual(detect_gesture(landmarks), "bunny_ears")
 
     def test_classify_hand_gestures_returns_all_hands(self) -> None:
         hand_results = SimpleNamespace(
             hand_landmarks=[blank_hand(), blank_hand()],
             handedness=[[SimpleNamespace(category_name="Right")], [SimpleNamespace(category_name="Left")]],
         )
+        hand_results.hand_landmarks[0][5].x = 0.3
+        hand_results.hand_landmarks[0][17].x = 0.7
         hand_results.hand_landmarks[0][3].x = 0.2
         hand_results.hand_landmarks[0][4].x = 0.1
         hand_results.hand_landmarks[0][6].y = 0.6
@@ -135,6 +172,8 @@ class GestureTests(unittest.TestCase):
         hand_results.hand_landmarks[0][16].y = 0.7
         hand_results.hand_landmarks[0][18].y = 0.6
         hand_results.hand_landmarks[0][20].y = 0.7
+        hand_results.hand_landmarks[1][5].x = 0.7
+        hand_results.hand_landmarks[1][17].x = 0.3
         hand_results.hand_landmarks[1][3].x = 0.2
         hand_results.hand_landmarks[1][4].x = 0.3
         hand_results.hand_landmarks[1][6].y = 0.6
