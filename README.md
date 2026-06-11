@@ -23,7 +23,7 @@ Real-time demo with a camera in Matrix style:
 Install uv : 
  - Official doc : https://docs.astral.sh/uv/
  - Asdf Plugin : https://docs.astral.sh/uv/
- - Mise backend/plugin : https://mise.jdx.dev/lang/uv.html
+ - Mise backend/plugin : https://mise.jdx.dev/mise-cookbook/python.html
 
 ## 1) Install with uv
 
