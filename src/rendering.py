@@ -37,7 +37,7 @@ class MatrixRain:
         self.trail_length = trail_length
         self.columns = max(1, width // spacing)
         self.drops = [random.randint(-height, 0) for _ in range(self.columns)]
-        self.charset = string.ascii_letters + string.digits + "#$%&@!?+-*/"
+        self.charset = string.digits
 
     def draw(self, frame: np.ndarray, boost: bool = False) -> None:
         overlay = np.zeros_like(frame)
