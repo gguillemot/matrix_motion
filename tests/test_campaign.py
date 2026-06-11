@@ -29,7 +29,8 @@ def dodge_pose() -> PoseObservation:
 class FullPlaythroughTests(unittest.TestCase):
     """Deroule une partie complete en ordre canonique :
     neo_dodge -> pill_choice -> white_rabbit -> no_spoon -> smith_scan.
-    round_duration=8, countdown=3, transition entre figures=1.2."""
+    round_duration=8, countdown=3, transition entre figures=2.4,
+    maintiens : dodge 0.5 s, pilule/bunny 0.9 s, cuillere 80 deg."""
 
     def test_full_run_publishes_chosen_pill_once(self) -> None:
         calls: list[str] = []
@@ -54,43 +55,54 @@ class FullPlaythroughTests(unittest.TestCase):
         self.assertEqual(event.phase, IN_ROUND)
         self.assertEqual(event.challenge_key, "neo_dodge")
 
-        # 1. Neo Dodge
-        event = engine.update([], dodge_pose(), 4.2, publish)
-        self.assertEqual(event.score, 170)
+        # 1. Neo Dodge : posture tenue 0.55 s
+        engine.update([], dodge_pose(), 4.2, publish)
+        event = engine.update([], dodge_pose(), 4.75, publish)
+        # (50 + int(50 * 7.35/8) = 45) x combo 1 = 95
+        self.assertEqual(event.score, 95)
+        self.assertEqual(event.celebration_key, "neo_dodge")
 
-        # 2. Pilule rouge : paume maintenue 0.5 s sur la zone (deadline 13.4)
+        # 2. Pilule rouge : paume maintenue 0.95 s (transition finit a 7.15, deadline 15.15)
         red_x, red_y = PILL_ZONES["red"]
-        engine.update([palm(red_x, red_y)], None, 5.5, publish)
-        event = engine.update([palm(red_x, red_y)], None, 6.0, publish)
+        engine.update([palm(red_x, red_y)], None, 7.3, publish)
+        event = engine.update([palm(red_x, red_y)], None, 8.25, publish)
         self.assertEqual(event.chosen_pill, "red")
-        self.assertEqual(event.flash_message, "RED PILL ACCEPTED")
-        self.assertEqual(event.score, 340)
+        self.assertIn("RED PILL ACCEPTED", event.flash_message)
+        self.assertIn("COMBO x2", event.flash_message)
+        # (50 + int(50 * 6.9/8) = 43) x combo 2 = 186 -> total 281
+        self.assertEqual(event.score, 281)
 
-        # 3. Bunny ears : 2 mains au-dessus du nez, 0.5 s (deadline 15.2)
+        # 3. Bunny ears : 2 mains au-dessus du nez, 0.95 s (deadline 18.65)
         ears = [bunny(0.42, 0.25), bunny(0.58, 0.28)]
-        engine.update(ears, still_pose(), 7.3, publish)
-        event = engine.update(ears, still_pose(), 7.8, publish)
-        self.assertEqual(event.score, 510)
+        engine.update(ears, still_pose(), 10.7, publish)
+        event = engine.update(ears, still_pose(), 11.65, publish)
+        # (50 + 43) x combo 3 = 279 -> total 560
+        self.assertEqual(event.score, 560)
+        self.assertEqual(event.combo, 3)
 
-        # 4. Cuillere : pince + rotation cumulee 0.9 rad > 45 deg (deadline 17.0)
-        engine.update([pinch(0.0)], None, 9.1, publish)
-        engine.update([pinch(0.45)], None, 9.2, publish)
-        event = engine.update([pinch(0.9)], None, 9.3, publish)
-        self.assertEqual(event.score, 680)
-        self.assertEqual(event.flash_message, "THERE IS NO SPOON")
+        # 4. Cuillere : pince + rotation cumulee 1.5 rad > 80 deg (deadline 22.05)
+        engine.update([pinch(0.0)], None, 14.1, publish)
+        engine.update([pinch(0.5)], None, 14.2, publish)
+        engine.update([pinch(1.0)], None, 14.3, publish)
+        event = engine.update([pinch(1.5)], None, 14.4, publish)
+        # (50 + int(50 * 7.65/8) = 47) x combo 4 = 388 -> total 948
+        self.assertEqual(event.score, 948)
+        self.assertIn("THERE IS NO SPOON", event.flash_message)
 
-        # 5. Scan : immobile 2 s (deadline 18.5)
-        engine.update([], still_pose(), 10.6, publish)
-        event = engine.update([], still_pose(), 12.7, publish)
+        # 5. Scan : immobile 2.1 s (deadline 24.8)
+        engine.update([], still_pose(), 16.9, publish)
+        event = engine.update([], still_pose(), 19.0, publish)
 
         self.assertEqual(event.phase, SCORE)
-        self.assertEqual(event.score, 830)
+        # (50 + int(50 * 5.8/8) = 36) x combo 5 = 430 -> total 1378
+        self.assertEqual(event.score, 1378)
         self.assertTrue(event.published)
+        self.assertTrue(event.new_record)
         self.assertEqual([result.success for result in event.round_results], [True] * 5)
         # La pilule choisie par le joueur part en MQTT, une seule fois
         self.assertEqual(calls, ["red"])
 
-        repeat = engine.update([], None, 13.0, publish)
+        repeat = engine.update([], None, 19.5, publish)
         self.assertEqual(repeat.phase, SCORE)
         self.assertEqual(calls, ["red"])
 

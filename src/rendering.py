@@ -43,7 +43,7 @@ class MatrixRain:
         self.drops = [random.randint(-height, 0) for _ in range(self.columns)]
         self.charset = string.digits
 
-    def draw(self, frame: np.ndarray, boost: bool = False) -> None:
+    def draw(self, frame: np.ndarray, boost: bool = False, white: bool = False) -> None:
         overlay = np.zeros_like(frame)
         speed = 25 if boost else 14
 
@@ -57,7 +57,8 @@ class MatrixRain:
 
                 char = random.choice(self.charset)
                 brightness = max(95, 255 - trail_idx * 35)
-                color = (35, brightness, 70)
+                # Pluie blanche pendant la celebration "Follow the White Rabbit"
+                color = (brightness, brightness, brightness) if white else (35, brightness, 70)
 
                 cv2.putText(overlay, char, (x, trail_y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
 
@@ -220,6 +221,10 @@ def draw_attract_screen(frame: np.ndarray, event: GameEvent) -> None:
     if event.start_hold_progress > 0:
         bar_width = 320
         _draw_progress_bar(frame, (frame.shape[1] - bar_width) // 2, height // 2 + 110, bar_width, 14, event.start_hold_progress)
+
+    # L'accroche competitive du stand
+    if event.best_score > 0:
+        _put_centered(frame, f"BEST TODAY : {event.best_score}", height // 2 + 170, 1.0, MATRIX_PALE_GREEN, 2)
 
 
 def draw_countdown(frame: np.ndarray, event: GameEvent) -> None:
@@ -412,6 +417,163 @@ def draw_agent_glasses(frame: np.ndarray, detections, progress: float) -> int:
     return faces
 
 
+# ---------------------------------------------------------------------------
+# Effets de recompense (celebration de ~2.4 s apres chaque figure reussie)
+# ---------------------------------------------------------------------------
+
+_VIGNETTE_CACHE: dict[tuple[int, int], np.ndarray] = {}
+_WAVE_GRID_CACHE: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
+
+
+def _vignette_mask(height: int, width: int) -> np.ndarray:
+    mask = _VIGNETTE_CACHE.get((height, width))
+    if mask is None:
+        ys = np.linspace(-1.0, 1.0, height, dtype=np.float32)[:, None]
+        xs = np.linspace(-1.0, 1.0, width, dtype=np.float32)[None, :]
+        dist = np.sqrt(xs * xs + ys * ys)
+        mask = np.clip(1.15 - dist, 0.0, 1.0)[..., None]
+        _VIGNETTE_CACHE[(height, width)] = mask
+    return mask
+
+
+def apply_vignette(frame: np.ndarray, strength: float) -> None:
+    """Assombrit les bords (strength 0 = rien, 1 = bords noirs)."""
+    if strength <= 0.0:
+        return
+    mask = _vignette_mask(*frame.shape[:2])
+    scale = 1.0 - strength * (1.0 - mask)
+    frame[:] = (frame * scale).astype(np.uint8)
+
+
+def draw_celebration(frame: np.ndarray, event: GameEvent) -> None:
+    """Effet visuel de recompense, dispatche par figure reussie.
+
+    `celebration_progress` va de 0 a 1 sur la fenetre : les effets demarrent
+    forts et s'estompent pour rendre la main a la figure suivante.
+    """
+    key = event.celebration_key
+    if not key:
+        return
+    progress = event.celebration_progress
+    if key == "neo_dodge":
+        _celebrate_dodge(frame, progress)
+    elif key == "pill_choice":
+        _celebrate_pill(frame, progress, event.chosen_pill or "red")
+    elif key == "white_rabbit":
+        _celebrate_rabbit(frame, progress)
+    elif key == "no_spoon":
+        _celebrate_spoon(frame, progress)
+    elif key == "smith_scan":
+        _celebrate_smith(frame, progress)
+
+
+def _celebrate_dodge(frame: np.ndarray, progress: float) -> None:
+    # Bullet-time : noir tout autour + desaturation + trainees de balles.
+    # Le rejeu au ralenti des dernieres frames est gere dans la boucle
+    # principale ; cet effet s'applique aux frames du rejeu.
+    height, width = frame.shape[:2]
+    fade = 1.0 - progress * progress
+
+    gray = cv2.cvtColor(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+    cv2.addWeighted(gray, 0.45 * fade, frame, 1.0 - 0.45 * fade, 0, frame)
+    apply_vignette(frame, 0.9 * fade)
+
+    overlay = frame.copy()
+    for _ in range(5):
+        start_y = random.randint(int(height * 0.2), int(height * 0.8))
+        sweep = random.randint(-40, 40)
+        head_x = int(width * (0.1 + 0.8 * random.random()))
+        cv2.line(overlay, (0, start_y), (head_x, start_y + sweep), (235, 235, 235), 2, cv2.LINE_AA)
+        cv2.circle(overlay, (head_x, start_y + sweep), 4, (255, 255, 255), -1)
+    cv2.addWeighted(overlay, 0.5 * fade, frame, 1.0 - 0.5 * fade, 0, frame)
+
+    _put_centered(frame, "BULLET TIME", int(height * 0.18), 1.2, (235, 235, 235), 2)
+
+
+def _celebrate_pill(frame: np.ndarray, progress: float, pill: str) -> None:
+    # Teinte plein ecran de la couleur avalee + anneaux depuis la pilule.
+    height, width = frame.shape[:2]
+    color = PILL_COLORS.get(pill, PILL_COLORS["red"])
+    fade = 1.0 - progress
+
+    tint = np.full_like(frame, color, dtype=np.uint8)
+    cv2.addWeighted(tint, 0.45 * fade, frame, 1.0 - 0.45 * fade, 0, frame)
+
+    zone_x, zone_y = PILL_ZONES.get(pill, PILL_ZONES["red"])
+    center = (int(zone_x * width), int(zone_y * height))
+    for ring in range(3):
+        radius = int((progress * 1.2 + ring * 0.25) * width * 0.5)
+        if radius > 0:
+            cv2.circle(frame, center, radius, color, 3, cv2.LINE_AA)
+
+
+def _celebrate_rabbit(frame: np.ndarray, progress: float) -> None:
+    # Silhouette de lapin blanc qui bondit a travers l'ecran (la pluie passe
+    # en blanc via MatrixRain.draw(white=True) dans la boucle principale).
+    height, width = frame.shape[:2]
+    white = (245, 245, 245)
+
+    rabbit_x = int(progress * (width + 240)) - 120
+    hop = int(abs(math.sin(progress * math.pi * 4)) * height * 0.08)
+    base_y = int(height * 0.72) - hop
+
+    body_w, body_h = int(height * 0.07), int(height * 0.05)
+    head_r = int(height * 0.028)
+    cv2.ellipse(frame, (rabbit_x, base_y), (body_w, body_h), 0, 0, 360, white, -1)
+    head_x, head_y = rabbit_x + body_w, base_y - body_h
+    cv2.circle(frame, (head_x, head_y), head_r, white, -1)
+    for ear_dx in (-head_r // 2, head_r // 2):
+        cv2.ellipse(
+            frame,
+            (head_x + ear_dx, head_y - head_r - int(height * 0.035)),
+            (max(3, head_r // 3), int(height * 0.04)),
+            -10 if ear_dx < 0 else 10,
+            0,
+            360,
+            white,
+            -1,
+        )
+    cv2.circle(frame, (rabbit_x - body_w, base_y - body_h // 2), max(4, head_r // 2), white, -1)
+
+
+def _celebrate_spoon(frame: np.ndarray, progress: float) -> None:
+    # "La realite se plie" : ondulation de toute l'image, qui s'amortit.
+    height, width = frame.shape[:2]
+    amplitude = 14.0 * (1.0 - progress)
+    if amplitude < 0.5:
+        return
+
+    grids = _WAVE_GRID_CACHE.get((height, width))
+    if grids is None:
+        xs = np.arange(width, dtype=np.float32)
+        ys = np.arange(height, dtype=np.float32)
+        grids = np.meshgrid(xs, ys)
+        _WAVE_GRID_CACHE[(height, width)] = grids
+    grid_x, grid_y = grids
+
+    phase = progress * 18.0
+    map_x = grid_x + amplitude * np.sin(grid_y / 28.0 + phase)
+    map_y = grid_y + amplitude * 0.6 * np.sin(grid_x / 36.0 + phase)
+    frame[:] = cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+
+def _celebrate_smith(frame: np.ndarray, progress: float) -> None:
+    # Glitch numerique : tranches decalees + teinte verte.
+    height, width = frame.shape[:2]
+    fade = 1.0 - progress
+
+    for _ in range(8):
+        slice_y = random.randint(0, height - 22)
+        slice_h = random.randint(4, 20)
+        shift = int(random.randint(-45, 45) * fade)
+        if shift:
+            frame[slice_y : slice_y + slice_h] = np.roll(frame[slice_y : slice_y + slice_h], shift, axis=1)
+
+    tint = np.zeros_like(frame)
+    tint[:, :, 1] = 255
+    cv2.addWeighted(tint, 0.18 * fade, frame, 1.0 - 0.18 * fade, 0, frame)
+
+
 def draw_flash(frame: np.ndarray, event: GameEvent) -> None:
     if not event.flash_message:
         return
@@ -430,10 +592,15 @@ def draw_score_screen(frame: np.ndarray, event: GameEvent) -> None:
 
     successes = sum(result.success for result in event.round_results)
     headline = "ACCESS GRANTED" if successes else "SYSTEM FAILURE"
-    _put_centered(frame, headline, 150, 1.8, MATRIX_GREEN, 3, glow=True)
-    _put_centered(frame, f"SCORE  {event.score}", 215, 1.3, MATRIX_PALE_GREEN, 2)
+    _put_centered(frame, headline, 140, 1.8, MATRIX_GREEN, 3, glow=True)
+    _put_centered(frame, f"SCORE  {event.score}", 200, 1.3, MATRIX_PALE_GREEN, 2)
+    if event.new_record:
+        if _blink(0.5):
+            _put_centered(frame, "NEW RECORD !", 245, 1.0, (255, 255, 255), 2)
+    elif event.best_score > 0:
+        _put_centered(frame, f"BEST : {event.best_score}", 245, 0.8, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
 
-    y = 280
+    y = 290
     for result in event.round_results:
         mark = "[OK]" if result.success else "[--]"
         points = f"+{result.points}" if result.success else "  0"
@@ -488,5 +655,9 @@ def draw_hud(frame: np.ndarray, fps: float, persons: int, faces: int, poses: int
     status = f"{event.phase}"
     if event.round_total:
         status += f" | ROUND {event.round_index}/{event.round_total}"
-    cv2.putText(frame, status, (w - 420, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
-    cv2.putText(frame, f"SCORE: {event.score}", (w - 420, 58), cv2.FONT_HERSHEY_DUPLEX, 0.7, MATRIX_GREEN, 2, cv2.LINE_AA)
+    cv2.putText(frame, status, (w - 440, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
+    cv2.putText(frame, f"SCORE: {event.score}", (w - 440, 58), cv2.FONT_HERSHEY_DUPLEX, 0.7, MATRIX_GREEN, 2, cv2.LINE_AA)
+    if event.best_score > 0:
+        cv2.putText(frame, f"BEST: {event.best_score}", (w - 165, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, MATRIX_PALE_GREEN, 1, cv2.LINE_AA)
+    if event.combo > 1:
+        cv2.putText(frame, f"COMBO x{event.combo}", (w - 165, 58), cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)

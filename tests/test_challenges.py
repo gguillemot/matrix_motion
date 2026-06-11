@@ -299,9 +299,10 @@ class SpoonTrackerTests(unittest.TestCase):
     def test_accumulates_rotation_until_target(self) -> None:
         tracker = SpoonTracker()
         self.assertAlmostEqual(tracker.update([hand_obs(is_pinch=True, hand_angle=0.0)]), 0.0)
-        tracker.update([hand_obs(is_pinch=True, hand_angle=0.45)])
-        progress = tracker.update([hand_obs(is_pinch=True, hand_angle=0.9)])
-        self.assertEqual(progress, 1.0)  # 0.9 rad > 45 deg
+        progress = 0.0
+        for angle in (0.45, 0.9, 1.35, 1.8):
+            progress = tracker.update([hand_obs(is_pinch=True, hand_angle=angle)])
+        self.assertEqual(progress, 1.0)  # 1.8 rad cumules > 80 deg
 
     def test_tracking_jump_is_ignored(self) -> None:
         tracker = SpoonTracker()
