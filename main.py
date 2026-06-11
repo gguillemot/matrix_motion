@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import queue
 import random
 import string
@@ -28,7 +29,10 @@ import mediapipe as mp
 import mediapipe.tasks as mpt
 import numpy as np
 import paho.mqtt.client as mqtt
+from dotenv import load_dotenv
 from ultralytics import YOLO
+
+load_dotenv()
 
 MATRIX_GREEN = (40, 255, 90)
 MATRIX_DARK_GREEN = (20, 120, 45)
@@ -292,8 +296,8 @@ def parse_args() -> AppConfig:
     parser.add_argument("--mqtt-disable", action="store_true")
     parser.add_argument("--mqtt-host", type=str, default="broker.hivemq.com")
     parser.add_argument("--mqtt-port", type=int, default=1883)
-    parser.add_argument("--mqtt-topic", type=str, default="thematrix/pill/CHANGE_TO_UNIQUE_ID")
-    parser.add_argument("--mqtt-token", type=str, default="CHANGE_ME_TO_A_LONG_RANDOM_SECRET")
+    parser.add_argument("--mqtt-topic", type=str, default=os.environ.get("MQTT_TOPIC", ""))
+    parser.add_argument("--mqtt-token", type=str, default=os.environ.get("MQTT_TOKEN", ""))
     parser.add_argument("--mqtt-client-id", type=str, default=f"matrix-motion-{random.randint(1000, 9999)}")
 
     args = parser.parse_args()

@@ -1,5 +1,6 @@
 .venv/
 __pycache__/
+.env
 yolov8n.pt
 hand_landmarker.task
 face_detector.tflite
