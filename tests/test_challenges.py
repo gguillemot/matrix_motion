@@ -189,20 +189,22 @@ class GestureTests(unittest.TestCase):
 
 
 class BreizhcampCampaignTests(unittest.TestCase):
-    def test_campaign_has_five_figures(self) -> None:
+    def test_campaign_has_four_figures(self) -> None:
+        # Le choix des pilules est une phase a part, pas une figure de campagne.
         campaign = build_breizhcamp_campaign(shuffle=False)
-        self.assertEqual(len(campaign), 5)
         self.assertEqual(
             [challenge.key for challenge in campaign],
-            ["neo_dodge", "pill_choice", "white_rabbit", "no_spoon", "smith_scan"],
+            ["neo_dodge", "white_rabbit", "no_spoon", "smith_scan"],
         )
 
-    def test_campaign_always_contains_pill_figure(self) -> None:
+    def test_shuffled_campaign_keeps_same_figures(self) -> None:
         import random
 
         campaign = build_breizhcamp_campaign(random.Random(7))
-        self.assertIn("pill_choice", [challenge.key for challenge in campaign])
-        self.assertEqual(len(campaign), 5)
+        self.assertEqual(
+            sorted(challenge.key for challenge in campaign),
+            ["neo_dodge", "no_spoon", "smith_scan", "white_rabbit"],
+        )
 
 
 class DodgeTests(unittest.TestCase):

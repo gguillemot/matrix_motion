@@ -24,9 +24,17 @@ from src.challenges import (
 )
 
 ATTRACT = "ATTRACT"
+INTRO = "INTRO"
+PILL_CHOICE = "PILL_CHOICE"
+BLUE_ENDING = "BLUE_ENDING"
 COUNTDOWN = "COUNTDOWN"
 IN_ROUND = "IN_ROUND"
 SCORE = "SCORE"
+
+# Le choix des pilules et la fin "pilule bleue" n'ont pas de timer de jeu,
+# mais un timeout d'inactivite ramene a l'attract si le passant est parti.
+PILL_CHOICE_IDLE_SEC = 30.0
+BLUE_ENDING_IDLE_SEC = 25.0
 
 # Scoring : points = (base + bonus vitesse) x multiplicateur de combo.
 # Le bonus vitesse est lineaire sur le temps restant (max 50) ; le combo
@@ -67,7 +75,8 @@ class GameState:
     flash_until: float = 0.0
     chosen_pill: str | None = None
     start_hold_since: float | None = None
-    score_published: bool = False
+    pill_published: bool = False
+    phase_entered_at: float = 0.0
     combo: int = 0
     celebration_key: str = ""
     celebration_started_at: float = 0.0
@@ -108,10 +117,15 @@ class GameEvent:
 
 
 class GameEngine:
-    """State machine du mini-jeu : ATTRACT -> COUNTDOWN -> IN_ROUND -> SCORE.
+    """State machine du mini-jeu.
 
-    Une figure ratee (timeout) passe simplement a la suivante avec 0 point :
-    la partie se termine toujours sur l'ecran de score.
+    ATTRACT -> INTRO (clip video, si disponible) -> PILL_CHOICE, puis :
+    - pilule bleue -> BLUE_ENDING (camera normale, invite a rejouer) ;
+    - pilule rouge -> COUNTDOWN -> IN_ROUND x4 -> SCORE.
+
+    La pilule choisie part en MQTT au moment du choix. Une figure ratee
+    (timeout) passe simplement a la suivante avec 0 point : le parcours
+    rouge se termine toujours sur l'ecran de score.
     """
 
     def __init__(
@@ -123,7 +137,9 @@ class GameEngine:
         rng: random.Random | None = None,
         state: GameState | None = None,
         best_score_path: str | Path | None = None,
+        has_intro: bool = False,
     ) -> None:
+        self.has_intro = has_intro
         self.state = state or GameState()
         self.round_duration = round_duration
         self.countdown_duration = countdown_duration
@@ -152,13 +168,14 @@ class GameEngine:
         if self._fixed_campaign is None:
             self.challenges = build_breizhcamp_campaign(self._rng)
         state = self.state
-        state.phase = COUNTDOWN
-        state.countdown_until = now + self.countdown_duration
+        state.phase = INTRO if self.has_intro else PILL_CHOICE
+        state.phase_entered_at = now
+        self._pill_hold.reset()
         state.score = 0
         state.round_index = 0
         state.round_results = []
         state.chosen_pill = None
-        state.score_published = False
+        state.pill_published = False
         state.flash_message = ""
         state.flash_until = 0.0
         state.start_hold_since = None
@@ -166,6 +183,19 @@ class GameEngine:
         state.celebration_key = ""
         state.celebration_until = 0.0
         state.new_record = False
+
+    def finish_intro(self, now: float) -> None:
+        """Appele par la boucle principale quand le clip d'intro se termine
+        ou est passe (touche ESPACE)."""
+        if self.state.phase == INTRO:
+            self.state.phase = PILL_CHOICE
+            self.state.phase_entered_at = now
+            self._pill_hold.reset()
+
+    def _go_attract(self, now: float) -> None:
+        self.state.phase = ATTRACT
+        self.state.phase_entered_at = now
+        self.state.start_hold_since = None
 
     def update(
         self,
@@ -177,8 +207,42 @@ class GameEngine:
         self._now = now
         state = self.state
 
-        if state.phase in (ATTRACT, SCORE):
+        if state.phase in (ATTRACT, SCORE, BLUE_ENDING):
+            if state.phase == BLUE_ENDING and now - state.phase_entered_at >= BLUE_ENDING_IDLE_SEC:
+                self._go_attract(now)
+                return self._snapshot()
             self._update_start_hold(hands, now)
+            return self._snapshot()
+
+        if state.phase == INTRO:
+            # La video est pilotee par la boucle principale (finish_intro).
+            return self._snapshot()
+
+        if state.phase == PILL_CHOICE:
+            if now - state.phase_entered_at >= PILL_CHOICE_IDLE_SEC:
+                self._go_attract(now)
+                return self._snapshot()
+            hover = pill_hover(hands)
+            self._pill_hover = hover
+            validated, progress = self._pill_hold.update(hover, now)
+            self._figure_progress = progress
+            if validated:
+                state.chosen_pill = validated
+                published = False
+                if not state.pill_published:
+                    state.pill_published = True
+                    published = publish_pill(validated)
+                if validated == "blue":
+                    # Fin de l'histoire : retour a la realite, camera normale.
+                    state.phase = BLUE_ENDING
+                    state.phase_entered_at = now
+                else:
+                    state.phase = COUNTDOWN
+                    state.countdown_until = now + self.countdown_duration
+                    self._set_flash("RED PILL ACCEPTED", now)
+                self._figure_progress = 0.0
+                self._pill_hover = None
+                return self._snapshot(published=published)
             return self._snapshot()
 
         if state.phase == COUNTDOWN:
@@ -199,8 +263,8 @@ class GameEngine:
             state.round_results.append(RoundResult(challenge.title, False, 0))
             state.combo = 0  # un echec casse le combo
             self._set_flash(TIMEOUT_MESSAGE, now)
-            published = self._advance(now, publish_pill)
-            return self._snapshot(published=published)
+            self._advance(now)
+            return self._snapshot()
 
         success, message = self._detect_figure(challenge, hands, pose, now)
         if success:
@@ -215,8 +279,8 @@ class GameEngine:
             state.celebration_key = challenge.key
             state.celebration_started_at = now
             state.celebration_until = now + ROUND_TRANSITION_SEC
-            published = self._advance(now, publish_pill)
-            return self._snapshot(published=published)
+            self._advance(now)
+            return self._snapshot()
 
         return self._snapshot()
 
@@ -256,7 +320,6 @@ class GameEngine:
         pose: PoseObservation | None,
         now: float,
     ) -> tuple[bool, str]:
-        state = self.state
         message = challenge.success_message
         self._figure_progress = 0.0
         self._pill_hover = None
@@ -268,16 +331,6 @@ class GameEngine:
             validated, progress = self._dodge_hold.update("dodge" if active else None, now)
             self._figure_progress = progress
             return validated is not None, message
-
-        if challenge.kind == "pill":
-            hover = pill_hover(hands)
-            self._pill_hover = hover
-            validated, progress = self._pill_hold.update(hover, now)
-            self._figure_progress = progress
-            if validated:
-                state.chosen_pill = validated
-                return True, f"{validated.upper()} PILL ACCEPTED"
-            return False, message
 
         if challenge.kind == "bunny":
             active = bunny_ears_active(hands, pose)
@@ -297,26 +350,22 @@ class GameEngine:
 
         return False, message
 
-    def _advance(self, now: float, publish_pill: Callable[[str], bool]) -> bool:
+    def _advance(self, now: float) -> None:
         state = self.state
         state.round_index += 1
         if state.round_index >= len(self.challenges):
             state.phase = SCORE
+            state.phase_entered_at = now
             state.start_hold_since = None
             if state.score > self.best_score:
                 self.best_score = state.score
                 state.new_record = True
                 self._save_best_score()
-            if not state.score_published:
-                state.score_published = True
-                pill = state.chosen_pill or (self.victory_pill if self.victory_pill != "auto" else "blue")
-                return publish_pill(pill)
-            return False
+            return
 
         state.round_transition_at = now + ROUND_TRANSITION_SEC
         state.round_deadline = state.round_transition_at + self.round_duration
         self._reset_round_trackers()
-        return False
 
     def _set_flash(self, message: str, now: float) -> None:
         self.state.flash_message = message
@@ -387,7 +436,7 @@ class GameEngine:
             spoon_angle=self._spoon.angle,
             start_hold_progress=start_hold_progress,
             chosen_pill=state.chosen_pill,
-            rain_boost=state.phase in (ATTRACT, SCORE) or bool(flash),
+            rain_boost=state.phase in (ATTRACT, SCORE) or bool(flash),  # BLUE_ENDING/INTRO : pas de pluie (bypass dans main)
             combo=state.combo,
             celebration_key=celebration_key,
             celebration_progress=celebration_progress,

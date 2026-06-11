@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from pathlib import Path
 
 import cv2
 import mediapipe as mp
@@ -10,19 +11,21 @@ from ultralytics import YOLO
 
 from src.config import PROJECT_ROOT, AppConfig, parse_args
 from src.challenges import observe_hands, observe_pose
-from src.game_engine import ATTRACT, COUNTDOWN, IN_ROUND, SCORE, GameEngine
+from src.game_engine import ATTRACT, BLUE_ENDING, COUNTDOWN, IN_ROUND, INTRO, PILL_CHOICE, SCORE, GameEngine
 from src.mqtt_client import MQTTConfig, MQTTPublisher
 from src.rendering import (
     MatrixRain,
     draw_agent_glasses,
     draw_attract_screen,
+    draw_blue_ending,
     draw_celebration,
     draw_countdown,
     draw_face_detections,
     draw_flash,
     draw_hand_detections,
     draw_hud,
-    draw_pills,
+    draw_intro_hint,
+    draw_pill_choice,
     draw_pose_skeleton,
     draw_round_overlay,
     draw_score_screen,
@@ -65,11 +68,19 @@ def run(cfg: AppConfig) -> None:
     face_detector = None
     pose_landmarker = None
     rain = None
+    intro_path = Path(cfg.intro_video)
+    has_intro = intro_path.exists()
+    if has_intro:
+        print(f"[INTRO] clip found: {intro_path} ({cfg.intro_start:.0f}s -> {cfg.intro_end:.0f}s, no audio, SPACE to skip)")
+    else:
+        print("[INTRO] no clip at assets/intro.mp4, intro skipped")
+
     engine = GameEngine(
         round_duration=cfg.round_duration,
         countdown_duration=cfg.countdown_duration,
         victory_pill=cfg.victory_pill,
         best_score_path=PROJECT_ROOT / "highscore.json",
+        has_intro=has_intro,
     )
 
     try:
@@ -103,6 +114,18 @@ def run(cfg: AppConfig) -> None:
         replay_frames: list[np.ndarray] = []
         replay_pos = 0.0
         bullet_time_active = False
+
+        # Lecteur du clip d'intro (phase INTRO), pilote par l'horloge murale.
+        intro_cap: cv2.VideoCapture | None = None
+        intro_started = 0.0
+        intro_last_frame: np.ndarray | None = None
+
+        def close_intro() -> None:
+            nonlocal intro_cap, intro_last_frame
+            if intro_cap is not None:
+                intro_cap.release()
+            intro_cap = None
+            intro_last_frame = None
 
         while True:
             ok, frame = cap.read()
@@ -151,7 +174,47 @@ def run(cfg: AppConfig) -> None:
 
             cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
 
-            if replay_frame is not None:
+            if event.phase == INTRO:
+                # Clip d'intro : la camera et le moteur continuent de tourner,
+                # seul l'affichage est remplace par la video (sans audio).
+                if intro_cap is None:
+                    intro_cap = cv2.VideoCapture(str(intro_path))
+                    intro_cap.set(cv2.CAP_PROP_POS_MSEC, cfg.intro_start * 1000.0)
+                    intro_started = now
+
+                elapsed = now - intro_started
+                intro_over = elapsed >= max(0.5, cfg.intro_end - cfg.intro_start)
+                target_ms = (cfg.intro_start + elapsed) * 1000.0
+                while not intro_over and intro_cap.get(cv2.CAP_PROP_POS_MSEC) < target_ms:
+                    ok_video, video_frame = intro_cap.read()
+                    if not ok_video:
+                        intro_over = True
+                        break
+                    intro_last_frame = video_frame
+
+                if intro_over:
+                    close_intro()
+                    engine.finish_intro(now)
+
+                display = np.zeros_like(frame)
+                if intro_last_frame is not None:
+                    vh, vw = intro_last_frame.shape[:2]
+                    scale = min(w_frame / vw, h_frame / vh)
+                    new_w, new_h = int(vw * scale), int(vh * scale)
+                    resized = cv2.resize(intro_last_frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                    off_x, off_y = (w_frame - new_w) // 2, (h_frame - new_h) // 2
+                    display[off_y : off_y + new_h, off_x : off_x + new_w] = resized
+                draw_intro_hint(display)
+                persons = faces = poses = 0
+
+            elif event.phase == BLUE_ENDING:
+                # Pilule bleue : camera brute, aucun effet Matrix, ni pluie ni
+                # HUD ni squelettes. Juste l'invite a rejouer.
+                display = frame
+                draw_blue_ending(display, event)
+                persons = faces = poses = 0
+
+            elif replay_frame is not None:
                 # Pendant le rejeu : pas d'overlays de detection ni d'ecran de
                 # round, juste l'effet bullet-time sur les frames du passe.
                 display = replay_frame
@@ -177,20 +240,21 @@ def run(cfg: AppConfig) -> None:
 
                 if event.phase == ATTRACT:
                     draw_attract_screen(display, event)
+                elif event.phase == PILL_CHOICE:
+                    draw_pill_choice(display, event)
                 elif event.phase == COUNTDOWN:
                     draw_countdown(display, event)
                 elif event.phase == IN_ROUND:
                     draw_round_overlay(display, event)
-                    if event.challenge_kind == "pill":
-                        draw_pills(display, event)
-                    elif event.challenge_kind == "spoon":
+                    if event.challenge_kind == "spoon":
                         draw_spoon(display, event)
                 elif event.phase == SCORE:
                     draw_score_screen(display, event)
 
-            draw_celebration(display, event)
-            rain.draw(display, boost=event.rain_boost, white=event.celebration_key == "white_rabbit")
-            draw_flash(display, event)
+            if event.phase not in (INTRO, BLUE_ENDING):
+                draw_celebration(display, event)
+                rain.draw(display, boost=event.rain_boost, white=event.celebration_key == "white_rabbit")
+                draw_flash(display, event)
 
             tick = time.perf_counter()
             dt = tick - last_tick
@@ -199,13 +263,17 @@ def run(cfg: AppConfig) -> None:
                 fps = instant_fps if fps == 0 else (0.9 * fps + 0.1 * instant_fps)
             last_tick = tick
 
-            draw_hud(display, fps=fps, persons=persons, faces=faces, poses=poses, event=event)
+            if event.phase not in (INTRO, BLUE_ENDING):
+                draw_hud(display, fps=fps, persons=persons, faces=faces, poses=poses, event=event)
 
             cv2.imshow(cfg.window_name, display)
             key = cv2.waitKey(1) & 0xFF
 
             if key in (ord("q"), 27):
                 break
+            if key == 32 and event.phase == INTRO:  # ESPACE : passer l'intro
+                close_intro()
+                engine.finish_intro(time.monotonic())
             if key == ord("f"):
                 current = cv2.getWindowProperty(cfg.window_name, cv2.WND_PROP_FULLSCREEN)
                 if current == cv2.WINDOW_FULLSCREEN:
@@ -214,6 +282,10 @@ def run(cfg: AppConfig) -> None:
                     cv2.setWindowProperty(cfg.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     finally:
         publisher.close()
+        try:
+            close_intro()
+        except NameError:
+            pass  # boucle jamais atteinte
         if yolo_worker is not None:
             yolo_worker.close()
         if hand_landmarker is not None:

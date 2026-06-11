@@ -33,6 +33,9 @@ class AppConfig:
     victory_pill: str
     round_duration: float
     countdown_duration: float
+    intro_video: str
+    intro_start: float
+    intro_end: float
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,6 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="duree en secondes laissee pour reussir chaque figure")
     parser.add_argument("--countdown-duration", type=float, default=3.0,
                         help="duree du decompte 3-2-1 avant la premiere figure")
+    parser.add_argument("--intro-video", type=str, default=str(PROJECT_ROOT / "assets" / "intro.mp4"),
+                        help="clip video local joue avant le choix des pilules (saute si absent)")
+    parser.add_argument("--intro-start", type=float, default=164.0,
+                        help="debut du segment du clip d'intro, en secondes (2:44)")
+    parser.add_argument("--intro-end", type=float, default=178.0,
+                        help="fin du segment du clip d'intro, en secondes (2:58)")
     return parser
 
 
@@ -91,4 +100,7 @@ def parse_args(argv: Sequence[str] | None = None) -> AppConfig:
         victory_pill=args.victory_pill,
         round_duration=args.round_duration,
         countdown_duration=args.countdown_duration,
+        intro_video=args.intro_video,
+        intro_start=args.intro_start,
+        intro_end=args.intro_end,
     )
