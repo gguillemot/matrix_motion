@@ -296,6 +296,47 @@ def draw_pills(frame: np.ndarray, event: GameEvent) -> None:
         cv2.putText(frame, label, (cx - text_w // 2, cy + 78), cv2.FONT_HERSHEY_DUPLEX, 0.8, color, 2, cv2.LINE_AA)
 
 
+def draw_pill_choice(frame: np.ndarray, event: GameEvent) -> None:
+    """Phase d'ouverture : le joueur choisit sa pilule avec la paume ouverte."""
+    height, width = frame.shape[:2]
+
+    _put_centered(frame, "CHOISIS TA PILULE", 140, 1.4, MATRIX_GREEN, 3, glow=True)
+    draw_pills(frame, event)
+
+    legends = {"red": "ENTRE DANS LA MATRICE", "blue": "RETOUR A LA REALITE"}
+    for name, (zone_x, zone_y) in PILL_ZONES.items():
+        label = legends[name]
+        (text_w, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        cx, cy = int(zone_x * width), int(zone_y * height)
+        cv2.putText(frame, label, (cx - text_w // 2, cy + 108), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_PALE_GREEN, 2, cv2.LINE_AA)
+
+    if event.figure_progress > 0:
+        bar_width = 320
+        _draw_progress_bar(frame, (width - bar_width) // 2, height - 70, bar_width, 14, event.figure_progress)
+    elif _blink(0.8):
+        _put_centered(frame, "PAUME OUVERTE SUR UNE PILULE", height - 64, 0.85, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
+
+
+def draw_blue_ending(frame: np.ndarray, event: GameEvent) -> None:
+    """Pilule bleue : camera normale, aucun effet Matrix. Texte discret et
+    invite a rejouer (gris neutres, surtout pas de vert Matrix)."""
+    height, width = frame.shape[:2]
+
+    _put_centered(frame, "RETOUR A LA REALITE", 90, 1.1, (235, 235, 235), 2)
+    _put_centered(frame, "L'HISTOIRE S'ARRETE ICI...", 135, 0.75, (180, 180, 180), 2, cv2.FONT_HERSHEY_SIMPLEX)
+
+    if _blink(1.0) or event.start_hold_progress > 0:
+        _put_centered(frame, "2 PAUMES OUVERTES POUR RETOURNER DANS LA MATRICE", height - 64, 0.8, (210, 210, 210), 2, cv2.FONT_HERSHEY_SIMPLEX)
+    if event.start_hold_progress > 0:
+        bar_width = 320
+        _draw_progress_bar(frame, (width - bar_width) // 2, height - 44, bar_width, 12, event.start_hold_progress, (220, 220, 220))
+
+
+def draw_intro_hint(frame: np.ndarray) -> None:
+    if _blink(1.2):
+        cv2.putText(frame, "ESPACE POUR PASSER", (24, frame.shape[0] - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+
+
 def draw_spoon(frame: np.ndarray, event: GameEvent) -> None:
     height, width = frame.shape[:2]
 
@@ -394,18 +435,23 @@ def draw_agent_glasses(frame: np.ndarray, detections, progress: float) -> int:
         # Les lunettes sont la recompense de l'immobilite : elles apparaissent
         # en fondu (opacite = progression du scan) et disparaissent des que le
         # joueur bouge. Opacite totale = victoire.
+        # Style "agent" : verres etroits et larges, ecartement reduit,
+        # monture argentee fine, pont court, branches vers les tempes, reflet.
         overlay = frame.copy()
-        eye_y = y + int(0.38 * bh)
-        eye_dx = int(0.22 * bw)
-        eye_axes = (max(6, int(0.15 * bw)), max(4, int(0.10 * bh)))
-        left_eye = (x + bw // 2 - eye_dx, eye_y)
-        right_eye = (x + bw // 2 + eye_dx, eye_y)
+        silver = (185, 185, 195)
+        eye_y = y + int(0.42 * bh)
+        lens_axes = (max(8, int(0.20 * bw)), max(5, int(0.09 * bh)))
+        left_eye = (x + int(0.30 * bw), eye_y)
+        right_eye = (x + int(0.70 * bw), eye_y)
         for center in (left_eye, right_eye):
-            cv2.ellipse(overlay, center, eye_axes, 0, 0, 360, (20, 20, 20), -1)
-            cv2.ellipse(overlay, center, eye_axes, 0, 0, 360, (90, 90, 90), 2)
-        cv2.line(overlay, (left_eye[0] + eye_axes[0], eye_y), (right_eye[0] - eye_axes[0], eye_y), (20, 20, 20), 3)
-        cv2.line(overlay, (x, eye_y), (left_eye[0] - eye_axes[0], eye_y), (20, 20, 20), 3)
-        cv2.line(overlay, (right_eye[0] + eye_axes[0], eye_y), (x + bw, eye_y), (20, 20, 20), 3)
+            cv2.ellipse(overlay, center, lens_axes, 0, 0, 360, (10, 10, 12), -1)
+            cv2.ellipse(overlay, center, lens_axes, 0, 0, 360, silver, 2)
+            # Reflet en haut a gauche du verre
+            gleam_center = (center[0] - lens_axes[0] // 3, center[1] - lens_axes[1] // 2)
+            cv2.ellipse(overlay, gleam_center, (lens_axes[0] // 4, max(2, lens_axes[1] // 4)), -20, 0, 360, (235, 235, 240), -1)
+        cv2.line(overlay, (left_eye[0] + lens_axes[0], eye_y - 2), (right_eye[0] - lens_axes[0], eye_y - 2), silver, 2)
+        cv2.line(overlay, (x, eye_y + 2), (left_eye[0] - lens_axes[0], eye_y), silver, 2)
+        cv2.line(overlay, (right_eye[0] + lens_axes[0], eye_y), (x + bw, eye_y + 2), silver, 2)
 
         # Ligne de scan animee par la progression d'immobilite
         scan_y = y + int(progress * bh)

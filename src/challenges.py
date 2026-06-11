@@ -116,15 +116,6 @@ _BREIZHCAMP_FIGURES: list[Challenge] = [
         success_message="DODGE SUCCESSFUL !",
     ),
     Challenge(
-        key="pill_choice",
-        title="Red Pill / Blue Pill",
-        prompt="Attrape une pilule avec ta paume ouverte",
-        kind="pill",
-        duration_sec=8.0,
-        background_asset="red_pill.png",
-        success_message="PILL ACCEPTED",
-    ),
-    Challenge(
         key="white_rabbit",
         title="Follow The White Rabbit",
         prompt="Oreilles de lapin au-dessus de la tete !",
@@ -155,7 +146,9 @@ _BREIZHCAMP_FIGURES: list[Challenge] = [
 
 
 def build_breizhcamp_campaign(rng: random.Random | None = None, shuffle: bool = True) -> list[Challenge]:
-    """Campagne d'une partie : les 5 figures, en ordre aleatoire par defaut."""
+    """Campagne d'une partie : les 4 epreuves de la pilule rouge, en ordre
+    aleatoire par defaut. Le choix des pilules est une phase a part, jouee
+    avant la campagne (voir GameEngine)."""
     campaign = [replace(challenge) for challenge in _BREIZHCAMP_FIGURES]
     if shuffle:
         (rng or random).shuffle(campaign)

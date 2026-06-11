@@ -10,9 +10,19 @@ Real-time demo with a camera in Matrix style:
 
 ## Mode jeu BreizhCamp 2026
 
-State machine : `ATTRACT` (ecran d'accueil) -> `COUNTDOWN` (3, 2, 1) -> `IN_ROUND` (5 figures, ordre aleatoire) -> `SCORE`.
+State machine :
 
-Demarrage : montrer **2 paumes ouvertes pendant 1 s** face a la camera (zero calibration). Une figure ratee (temps ecoule) passe simplement a la suivante avec 0 point : la partie se termine toujours sur l'ecran de score.
+```
+ATTRACT --2 paumes 1s--> INTRO (clip video, si present) --> PILL_CHOICE
+PILL_CHOICE --pilule bleue--> BLUE_ENDING (camera normale, sans effet) --2 paumes--> nouvelle partie
+PILL_CHOICE --pilule rouge--> COUNTDOWN (3, 2, 1) --> IN_ROUND (4 epreuves, ordre aleatoire) --> SCORE
+```
+
+Demarrage : montrer **2 paumes ouvertes pendant 1 s** face a la camera (zero calibration). Le jeu s'ouvre sur le **choix des pilules** : la bleue ramene a la realite (camera brute, aucun effet Matrix, invite a rejouer), la rouge lance les 4 epreuves. La pilule choisie est publiee en MQTT **au moment du choix**. Une epreuve ratee (temps ecoule) passe simplement a la suivante avec 0 point : le parcours rouge se termine toujours sur l'ecran de score.
+
+### Clip d'intro
+
+Deposer un fichier video local `assets/intro.mp4` (non versionne, `assets/*.mp4` est dans `.gitignore`). Le segment joue est configurable : `--intro-start 164 --intro-end 178` (defaut 2:44 -> 2:58). Lecture **sans audio** (limite OpenCV), touche **ESPACE** pour passer. Fichier absent : l'intro est sautee, le jeu va directement au choix des pilules.
 
 Scoring : `points = (50 + bonus vitesse jusqu'a 50) x combo`. Le **combo** (x1 a x5) compte les figures reussies d'affilee, un echec le casse. Partie moyenne ~150-400 pts, partie parfaite et rapide ~1400 pts. Le **meilleur score du jour** est persiste dans `highscore.json` et affiche sur l'ecran d'accueil (`BEST TODAY`) ; le battre declenche `NEW RECORD !`.
 
@@ -22,9 +32,9 @@ Les 5 figures (seuils geometriques documentes dans `src/challenges.py`) :
 
 | Figure | Action joueur | Detection |
 |---|---|---|
-| The Neo Dodge | Pencher fortement buste + tete sur le cote | Offset nez / centre des epaules >= 30 % de l'envergure d'epaules |
-| Red Pill / Blue Pill | Attraper une des 2 pilules affichees avec la paume ouverte | Paume dans la hitbox 0.4 s — **la pilule choisie part en MQTT** |
-| Follow the White Rabbit | Oreilles de lapin (index + majeur) au-dessus de la tete | 2 mains `bunny_ears` au-dessus du nez, 0.4 s |
+| Choix des pilules (ouverture) | Attraper une des 2 pilules affichees avec la paume ouverte | Paume dans la hitbox 0.9 s — la pilule choisie part en MQTT, la bleue termine la partie |
+| The Neo Dodge | Pencher fortement buste + tete sur le cote, tenir 0.5 s | Offset nez / centre des epaules >= 30 % de l'envergure d'epaules |
+| Follow the White Rabbit | Oreilles de lapin (index + majeur) au-dessus de la tete | 2 mains `bunny_ears` au-dessus du nez, 0.9 s |
 | There Is No Spoon | Tordre par "telekinesie" la cuillere geante au centre de l'ecran : pincer pouce-index et tourner la main | Pince pouce-index + rotation cumulee >= 45° |
 | Agent Smith | Ne plus bouger du tout : les lunettes d'agent apparaissent en fondu avec l'immobilite, opacite totale = gagne | Nez immobile (< 8 % de l'envergure d'epaules) pendant 2 s |
 
