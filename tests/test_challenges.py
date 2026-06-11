@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from src.challenges import build_campaign, challenge_matches, classify_hand_gestures, detect_gesture, finger_states
+from src.challenges import PoseObservation, build_campaign, challenge_matches, classify_hand_gestures, detect_gesture, finger_states, pose_matches
 
 
 def landmark(x: float, y: float) -> SimpleNamespace:
@@ -130,3 +130,13 @@ class ChallengeTests(unittest.TestCase):
         hand_results.hand_landmarks[1][20].y = 0.4
 
         self.assertEqual(classify_hand_gestures(hand_results), ["thumbs_up", "open_palm"])
+
+    def test_pose_matches_detects_lateral_dodge(self) -> None:
+        campaign = build_campaign(5)
+        neo_dodge = campaign[0]
+
+        dodge_left = PoseObservation(nose_x=0.20, shoulder_center_x=0.52, shoulder_span=0.40)
+        dodge_center = PoseObservation(nose_x=0.50, shoulder_center_x=0.52, shoulder_span=0.40)
+
+        self.assertTrue(pose_matches(neo_dodge, dodge_left))
+        self.assertFalse(pose_matches(neo_dodge, dodge_center))

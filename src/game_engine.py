@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
-from src.challenges import Challenge, build_campaign, challenge_matches
+from src.challenges import Challenge, PoseObservation, build_campaign, challenge_matches, pose_matches
 
 
 IDLE = "IDLE"
@@ -147,6 +147,15 @@ class GameEngine:
             self.state.status = ""
 
     def update(self, hand_gestures: Sequence[str], now: float, publish_pill: Callable[[str], bool]) -> GameEvent:
+        return self.update_with_pose(hand_gestures, None, now, publish_pill)
+
+    def update_with_pose(
+        self,
+        hand_gestures: Sequence[str],
+        pose_observation: PoseObservation | None,
+        now: float,
+        publish_pill: Callable[[str], bool],
+    ) -> GameEvent:
         self._now = now
         self.tick(now)
 
@@ -192,7 +201,8 @@ class GameEngine:
             self.state.game_over_reason = "TEMPS ECOULE"
             return self._snapshot()
 
-        if challenge_matches(challenge, hand_gestures):
+        challenge_hit = challenge_matches(challenge, hand_gestures) or pose_matches(challenge, pose_observation)
+        if challenge_hit:
             self.state.round_index += 1
             self.state.round_transition_at = now + 0.35
             if self.state.round_index >= len(self.challenges):

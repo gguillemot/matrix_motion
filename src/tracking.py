@@ -16,6 +16,10 @@ _MEDIAPIPE_MODELS = {
         "https://storage.googleapis.com/mediapipe-models/"
         "hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
     ),
+    "pose_landmarker_lite.task": (
+        "https://storage.googleapis.com/mediapipe-models/"
+        "pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
+    ),
     "face_detector.tflite": (
         "https://storage.googleapis.com/mediapipe-models/"
         "face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite"
@@ -99,3 +103,15 @@ def create_face_detector() -> mpt.vision.FaceDetector:
         min_detection_confidence=0.55,
     )
     return mpt.vision.FaceDetector.create_from_options(face_options)
+
+
+def create_pose_landmarker() -> mpt.vision.PoseLandmarker:
+    pose_options = mpt.vision.PoseLandmarkerOptions(
+        base_options=mpt.BaseOptions(model_asset_path=ensure_model("pose_landmarker_lite.task")),
+        running_mode=mpt.vision.RunningMode.VIDEO,
+        num_poses=1,
+        min_pose_detection_confidence=0.55,
+        min_pose_presence_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    return mpt.vision.PoseLandmarker.create_from_options(pose_options)

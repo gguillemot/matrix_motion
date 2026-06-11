@@ -7,10 +7,11 @@ import mediapipe as mp
 from ultralytics import YOLO
 
 from src.config import AppConfig, parse_args
+from src.challenges import observe_pose
 from src.game_engine import GameEngine, GameState
 from src.mqtt_client import MQTTConfig, MQTTPublisher
 from src.rendering import MatrixRain, draw_face_detections, draw_hand_detections, draw_hud, draw_yolo_detections, render_challenge_frame
-from src.tracking import YoloWorker, create_face_detector, create_hand_landmarker
+from src.tracking import YoloWorker, create_face_detector, create_hand_landmarker, create_pose_landmarker
 
 
 def run(cfg: AppConfig) -> None:
@@ -44,6 +45,7 @@ def run(cfg: AppConfig) -> None:
     model: YOLO | None = None
     hand_landmarker = None
     face_detector = None
+    pose_landmarker = None
     rain = None
     engine = GameEngine(
         sequence_length=cfg.sequence_length,
@@ -62,6 +64,7 @@ def run(cfg: AppConfig) -> None:
 
         hand_landmarker = create_hand_landmarker()
         face_detector = create_face_detector()
+        pose_landmarker = create_pose_landmarker()
         video_start_ts = time.perf_counter()
 
         ret, frame = cap.read()
@@ -89,6 +92,7 @@ def run(cfg: AppConfig) -> None:
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             hand_results = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
             face_results = face_detector.detect_for_video(mp_image, timestamp_ms)
+            pose_results = pose_landmarker.detect_for_video(mp_image, timestamp_ms)
             h_frame, w_frame = frame.shape[:2]
 
             if yolo_worker is not None and frame_idx % cfg.yolo_stride == 0:
@@ -98,9 +102,10 @@ def run(cfg: AppConfig) -> None:
             persons = draw_yolo_detections(frame, cached_boxes, getattr(model, "names", {}))
             faces = draw_face_detections(frame, face_results.detections)
             hand_gestures = draw_hand_detections(frame, hand_results, w_frame, h_frame)
+            pose_observation = observe_pose(pose_results)
 
             now = time.monotonic()
-            event = engine.update(hand_gestures, now, publisher.publish_pill)
+            event = engine.update_with_pose(hand_gestures, pose_observation, now, publisher.publish_pill)
 
             render_challenge_frame(frame, event)
 
@@ -134,6 +139,8 @@ def run(cfg: AppConfig) -> None:
             hand_landmarker.close()
         if face_detector is not None:
             face_detector.close()
+        if pose_landmarker is not None:
+            pose_landmarker.close()
         cap.release()
         cv2.destroyAllWindows()
 

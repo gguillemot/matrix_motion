@@ -21,10 +21,24 @@ class Challenge:
     title: str
     prompt: str
     target_gesture: str
+    kind: str = "gesture"
+    motion_direction: str | None = None
     min_hands: int = 1
     duration_sec: float = 6.0
     background_asset: str = ""
     victory_pill: str = "blue"
+
+
+@dataclass(slots=True)
+class PoseObservation:
+    nose_x: float
+    shoulder_center_x: float
+    shoulder_span: float
+
+    @property
+    def normalized_nose_offset(self) -> float:
+        span = max(self.shoulder_span, 1e-6)
+        return (self.nose_x - self.shoulder_center_x) / span
 
 
 _CHALLENGE_POOL: list[Challenge] = [
@@ -32,7 +46,9 @@ _CHALLENGE_POOL: list[Challenge] = [
         key="neo_dodge",
         title="Neo Dodge",
         prompt="Neo dodge en bullet time",
-        target_gesture="fist",
+        target_gesture="neo_dodge",
+        kind="pose",
+        motion_direction="either",
         duration_sec=6.0,
         background_asset="neo_dodge.png",
     ),
@@ -186,3 +202,37 @@ def count_gestures(gestures: Sequence[str], target: str) -> int:
 
 def challenge_matches(challenge: Challenge, gestures: Sequence[str]) -> bool:
     return count_gestures(gestures, challenge.target_gesture) >= challenge.min_hands
+
+
+def pose_matches(challenge: Challenge, pose_observation: PoseObservation | None) -> bool:
+    if challenge.kind != "pose" or pose_observation is None:
+        return False
+
+    offset = pose_observation.normalized_nose_offset
+    if challenge.motion_direction == "left":
+        return offset <= -0.22
+    if challenge.motion_direction == "right":
+        return offset >= 0.22
+
+    return abs(offset) >= 0.22
+
+
+def observe_pose(pose_results) -> PoseObservation | None:
+    pose_landmarks = getattr(pose_results, "pose_landmarks", None)
+    if not pose_landmarks:
+        return None
+
+    landmarks = pose_landmarks[0]
+    if len(landmarks) < 25:
+        return None
+
+    nose = landmarks[0]
+    left_shoulder = landmarks[11]
+    right_shoulder = landmarks[12]
+
+    if not hasattr(nose, "x") or not hasattr(left_shoulder, "x") or not hasattr(right_shoulder, "x"):
+        return None
+
+    shoulder_center_x = (left_shoulder.x + right_shoulder.x) / 2.0
+    shoulder_span = abs(right_shoulder.x - left_shoulder.x)
+    return PoseObservation(nose_x=nose.x, shoulder_center_x=shoulder_center_x, shoulder_span=shoulder_span)
