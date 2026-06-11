@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 import time
 from collections import deque
 from pathlib import Path
@@ -8,6 +10,8 @@ import cv2
 import mediapipe as mp
 import numpy as np
 from ultralytics import YOLO
+
+_FFPLAY = shutil.which("ffplay")
 
 from src.config import PROJECT_ROOT, AppConfig, parse_args
 from src.challenges import observe_hands, observe_pose
@@ -71,7 +75,7 @@ def run(cfg: AppConfig) -> None:
     intro_path = Path(cfg.intro_video)
     has_intro = intro_path.exists()
     if has_intro:
-        print(f"[INTRO] clip found: {intro_path} ({cfg.intro_start:.0f}s -> {cfg.intro_end:.0f}s, no audio, SPACE to skip)")
+        print(f"[INTRO] clip found: {intro_path} ({cfg.intro_start:.0f}s -> {cfg.intro_end:.0f}s, SPACE to skip)")
     else:
         print("[INTRO] no clip at assets/intro.mp4, intro skipped")
 
@@ -119,9 +123,31 @@ def run(cfg: AppConfig) -> None:
         intro_cap: cv2.VideoCapture | None = None
         intro_started = 0.0
         intro_last_frame: np.ndarray | None = None
+        _audio_proc: subprocess.Popen | None = None
+
+        def start_intro_audio() -> None:
+            nonlocal _audio_proc
+            if _FFPLAY is None:
+                print("[AUDIO] ffplay not found – intro plays without audio")
+                return
+            dur = cfg.intro_end - cfg.intro_start
+            _audio_proc = subprocess.Popen(
+                [
+                    _FFPLAY,
+                    "-nodisp", "-autoexit",
+                    "-ss", str(cfg.intro_start),
+                    "-t",  str(dur),
+                    str(intro_path),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
         def close_intro() -> None:
-            nonlocal intro_cap, intro_last_frame
+            nonlocal intro_cap, intro_last_frame, _audio_proc
+            if _audio_proc is not None:
+                _audio_proc.terminate()
+                _audio_proc = None
             if intro_cap is not None:
                 intro_cap.release()
             intro_cap = None
@@ -181,6 +207,7 @@ def run(cfg: AppConfig) -> None:
                     intro_cap = cv2.VideoCapture(str(intro_path))
                     intro_cap.set(cv2.CAP_PROP_POS_MSEC, cfg.intro_start * 1000.0)
                     intro_started = now
+                    start_intro_audio()
 
                 elapsed = now - intro_started
                 intro_over = elapsed >= max(0.5, cfg.intro_end - cfg.intro_start)
