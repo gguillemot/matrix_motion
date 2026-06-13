@@ -65,9 +65,16 @@ class MQTTPublisher:
     def publish_pill(self, pill: str) -> bool:
         if not self.enabled or self.client is None or mqtt is None:
             return False
+        if not self.topic:
+            print(f"[MQTT] skipped (no topic configured) pill={pill}")
+            return False
 
         payload = build_pill_payload(self.token, pill)
-        info = self.client.publish(self.topic, payload, qos=0, retain=False)
+        try:
+            info = self.client.publish(self.topic, payload, qos=0, retain=False)
+        except ValueError as exc:
+            print(f"[MQTT] publish failed (invalid topic '{self.topic}'): {exc}")
+            return False
         return info.rc == mqtt.MQTT_ERR_SUCCESS
 
     def close(self) -> None:

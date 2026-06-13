@@ -12,6 +12,8 @@ import numpy as np
 from ultralytics import YOLO
 
 from src.config import (
+    BULLET_TIME_BUFFER_FRAMES,
+    BULLET_TIME_PLAYBACK_FPS,
     MASK_BLUR_KSIZE,
     MASK_INVERT,
     MASK_SMOOTHING,
@@ -151,11 +153,11 @@ def run(cfg: AppConfig) -> None:
         last_tick = time.perf_counter()
         fps = 0.0
 
-        # Bullet-time : on garde les ~24 dernieres frames propres pour les
+        # Bullet-time : on garde les dernieres frames propres pour les
         # rejouer au ralenti quand le Neo Dodge est reussi.
-        frame_buffer: deque[np.ndarray] = deque(maxlen=24)
+        frame_buffer: deque[np.ndarray] = deque(maxlen=BULLET_TIME_BUFFER_FRAMES)
         replay_frames: list[np.ndarray] = []
-        replay_pos = 0.0
+        replay_started_at = 0.0
         bullet_time_active = False
 
         # Lecteur du clip d'intro (phase INTRO), pilote par l'horloge murale.
@@ -221,21 +223,22 @@ def run(cfg: AppConfig) -> None:
                 print(f"[MQTT] pill published: {event.chosen_pill or 'default'}")
 
             # Bullet-time : au debut de la celebration du dodge, on fige le
-            # buffer ; tant qu'il reste des frames, on les rejoue ~2.5x plus
-            # lentement pendant que camera et moteur continuent de tourner.
+            # buffer et on note l'instant de depart pour piloter la lecture
+            # par l'horloge (cadence stable quel que soit le framerate).
             if event.celebration_key == "neo_dodge":
                 if not bullet_time_active:
                     bullet_time_active = True
                     replay_frames = list(frame_buffer)
-                    replay_pos = 0.0
+                    replay_started_at = now
             else:
                 bullet_time_active = False
                 replay_frames = []
 
             replay_frame = None
-            if bullet_time_active and int(replay_pos) < len(replay_frames):
-                replay_frame = replay_frames[int(replay_pos)].copy()
-                replay_pos += 0.4
+            if bullet_time_active and replay_frames:
+                idx = int((now - replay_started_at) * BULLET_TIME_PLAYBACK_FPS)
+                idx = min(idx, len(replay_frames) - 1)   # fige sur la derniere frame
+                replay_frame = replay_frames[idx].copy()
 
             cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
 

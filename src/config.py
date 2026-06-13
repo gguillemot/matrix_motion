@@ -42,6 +42,22 @@ FOREGROUND_GREEN_TINT = 0.22
 # qu'un noir pur derriere les caracteres.
 RAIN_BACKGROUND_COLOR = (8, 14, 8)
 
+# ---------------------------------------------------------------------------
+# Bullet-time : replay au ralenti apres le Neo Dodge reussi
+# ---------------------------------------------------------------------------
+# Duree de la fenetre bullet-time = duree de la celebration ET de la pause
+# avant la figure suivante, UNIQUEMENT pour le Neo Dodge (les autres figures
+# gardent ROUND_TRANSITION_SEC). Laisse le temps de re-regarder l'esquive.
+BULLET_TIME_REPLAY_SEC = 4.5
+
+# Nombre de frames de camera gardees avant le succes pour etre rejouees.
+# ~48 frames = ~2 s de footage selon le framerate de la boucle.
+BULLET_TIME_BUFFER_FRAMES = 48
+
+# Cadence de relecture du buffer, en frames/seconde (horloge murale). Basse =
+# tres ralenti. 11 fps sur ~2 s de footage capture a ~22 fps => ~2x slow motion.
+BULLET_TIME_PLAYBACK_FPS = 11.0
+
 
 @dataclass(slots=True)
 class AppConfig:

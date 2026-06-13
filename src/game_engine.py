@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
+from src.config import BULLET_TIME_REPLAY_SEC
 from src.challenges import (
     BUNNY_HOLD_SEC,
     DODGE_HOLD_SEC,
@@ -278,8 +279,9 @@ class GameEngine:
             self._set_flash(message, now)
             state.celebration_key = challenge.key
             state.celebration_started_at = now
-            state.celebration_until = now + ROUND_TRANSITION_SEC
-            self._advance(now)
+            transition = BULLET_TIME_REPLAY_SEC if challenge.key == "neo_dodge" else ROUND_TRANSITION_SEC
+            state.celebration_until = now + transition
+            self._advance(now, transition)
             return self._snapshot()
 
         return self._snapshot()
@@ -350,7 +352,7 @@ class GameEngine:
 
         return False, message
 
-    def _advance(self, now: float) -> None:
+    def _advance(self, now: float, transition: float = ROUND_TRANSITION_SEC) -> None:
         state = self.state
         state.round_index += 1
         if state.round_index >= len(self.challenges):
@@ -363,7 +365,7 @@ class GameEngine:
                 self._save_best_score()
             return
 
-        state.round_transition_at = now + ROUND_TRANSITION_SEC
+        state.round_transition_at = now + transition
         state.round_deadline = state.round_transition_at + self.round_duration
         self._reset_round_trackers()
 
