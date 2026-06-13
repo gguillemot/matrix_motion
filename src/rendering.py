@@ -293,6 +293,30 @@ def draw_countdown(frame: np.ndarray, event: GameEvent) -> None:
     _put_centered(frame, str(value), height // 2 + 70, scale, MATRIX_GREEN, 10, glow=True)
 
 
+def draw_ready_card(frame: np.ndarray, event: GameEvent) -> None:
+    """Ecran "prepare-toi" entre la celebration et l'activation de la figure :
+    annonce la figure suivante (titre + consigne) chrono fige, pour laisser le
+    temps de comprendre l'epreuve avant qu'elle ne demarre."""
+    height, _ = frame.shape[:2]
+    _darken(frame, 0.45)
+
+    _put_centered(frame, "PREPARE-TOI", height // 2 - 150, 1.1, MATRIX_PALE_GREEN, 2)
+    _put_centered(
+        frame, event.challenge_title.upper(), height // 2 - 60, 1.7, MATRIX_GREEN, 3, glow=True
+    )
+    _put_centered(
+        frame,
+        event.challenge_prompt,
+        height // 2 + 20,
+        0.9,
+        MATRIX_PALE_GREEN,
+        2,
+        font=cv2.FONT_HERSHEY_SIMPLEX,
+    )
+    countdown = max(1, math.ceil(event.round_starts_in))
+    _put_centered(frame, str(countdown), height // 2 + 140, 2.5, MATRIX_GREEN, 6, glow=True)
+
+
 def draw_round_overlay(frame: np.ndarray, event: GameEvent) -> None:
     height, width = frame.shape[:2]
 

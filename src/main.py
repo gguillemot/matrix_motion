@@ -42,6 +42,7 @@ from src.rendering import (
     draw_intro_hint,
     draw_pill_choice,
     draw_pose_skeleton,
+    draw_ready_card,
     draw_round_overlay,
     draw_bullet_stop,
     draw_score_screen,
@@ -397,11 +398,16 @@ def run(cfg: AppConfig) -> None:
                 elif event.phase == COUNTDOWN:
                     draw_countdown(display, event)
                 elif event.phase == IN_ROUND:
-                    draw_round_overlay(display, event)
-                    if event.challenge_kind == "spoon":
-                        draw_spoon(display, event)
-                    elif event.challenge_kind == "bullet_stop":
-                        draw_bullet_stop(display, event)
+                    if event.celebration_key:
+                        pass  # celebration en cours : draw_celebration gere seul, pas d'overlay figure
+                    elif not event.figure_active:
+                        draw_ready_card(display, event)  # ecran "prepare-toi" avant la figure
+                    else:
+                        draw_round_overlay(display, event)
+                        if event.challenge_kind == "spoon":
+                            draw_spoon(display, event)
+                        elif event.challenge_kind == "bullet_stop":
+                            draw_bullet_stop(display, event)
                 elif event.phase == SCORE:
                     draw_score_screen(display, event)
 

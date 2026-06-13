@@ -51,8 +51,16 @@ MAX_COMBO = 5
 # 2 paumes ouvertes maintenues 1 s pour (re)lancer une partie : zero
 # calibration, demarre de loin, et tres peu de faux positifs.
 START_HOLD_SEC = 1.0
-# Pause entre deux figures : fenetre de celebration ou l'effet visuel de
-# recompense se joue, avant la figure suivante.
+# Passage d'une figure a la suivante, en deux temps pour eviter tout overlap :
+#  1. CELEBRATION_SEC : l'effet de recompense de la figure reussie joue SEUL ;
+#  2. READY_SEC : un ecran "prepare-toi" annonce la figure suivante (titre +
+#     consigne), chrono fige, avant que la detection ne demarre.
+# Les figures a celebration speciale remplacent l'etape 1 par leur duree propre
+# (replay bullet-time, clip video) mais gardent le meme beat "prepare-toi".
+CELEBRATION_SEC = 3.0
+READY_SEC = 2.0
+# Pause par defaut sur timeout (echec) : pas de celebration, juste le message
+# "TOO SLOW" puis l'annonce de la figure suivante.
 ROUND_TRANSITION_SEC = 3.5
 FLASH_DURATION_SEC = 2.2
 
@@ -101,6 +109,8 @@ class GameEvent:
     challenge_prompt: str = ""
     challenge_kind: str = ""
     challenge_background_asset: str = ""
+    figure_active: bool = False  # False pendant l'ecran "prepare-toi" (chrono fige)
+    round_starts_in: float = 0.0  # compte a rebours avant l'activation de la figure
     flash_message: str = ""
     countdown_value: int = 0
     figure_progress: float = 0.0  # maintien pilule/bunny, rotation cuillere, scan
@@ -283,14 +293,16 @@ class GameEngine:
             self._set_flash(message, now)
             state.celebration_key = challenge.key
             state.celebration_started_at = now
+            # La celebration finit a celebration_until ; la figure suivante ne
+            # devient active que READY_SEC plus tard (ecran "prepare-toi").
             if challenge.key == "neo_dodge":
-                transition = BULLET_TIME_REPLAY_SEC
+                celeb_dur = BULLET_TIME_REPLAY_SEC
             elif challenge.key == "bullet_stop":
-                transition = BULLET_STOP_VIDEO_SEC
+                celeb_dur = BULLET_STOP_VIDEO_SEC
             else:
-                transition = ROUND_TRANSITION_SEC
-            state.celebration_until = now + transition
-            self._advance(now, transition)
+                celeb_dur = CELEBRATION_SEC
+            state.celebration_until = now + celeb_dur
+            self._advance(now, celeb_dur + READY_SEC)
             return self._snapshot()
 
         return self._snapshot()
@@ -412,8 +424,12 @@ class GameEngine:
 
         challenge = self.current_challenge() if state.phase == IN_ROUND else None
         timer_left = 0.0
+        figure_active = False
+        round_starts_in = 0.0
         if state.phase == IN_ROUND:
             timer_left = min(self.round_duration, max(0.0, state.round_deadline - now))
+            figure_active = now >= state.round_transition_at
+            round_starts_in = max(0.0, state.round_transition_at - now)
 
         if state.phase == IN_ROUND:
             display_round = state.round_index + 1
@@ -447,6 +463,8 @@ class GameEngine:
             challenge_prompt=challenge.prompt if challenge else "",
             challenge_kind=challenge.kind if challenge else "",
             challenge_background_asset=challenge.background_asset if challenge else "",
+            figure_active=figure_active,
+            round_starts_in=round_starts_in,
             flash_message=flash,
             countdown_value=countdown_value,
             figure_progress=self._figure_progress,

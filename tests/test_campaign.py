@@ -4,7 +4,16 @@ import unittest
 
 from src.challenges import PILL_ZONES, HandObservation, PoseObservation, build_breizhcamp_campaign
 from src.config import BULLET_TIME_REPLAY_SEC
-from src.game_engine import BLUE_ENDING, COUNTDOWN, IN_ROUND, PILL_CHOICE, ROUND_TRANSITION_SEC, SCORE, GameEngine
+from src.game_engine import (
+    BLUE_ENDING,
+    CELEBRATION_SEC,
+    COUNTDOWN,
+    IN_ROUND,
+    PILL_CHOICE,
+    READY_SEC,
+    SCORE,
+    GameEngine,
+)
 
 
 def palm(x: float = 0.5, y: float = 0.5) -> HandObservation:
@@ -31,8 +40,9 @@ class FullPlaythroughTests(unittest.TestCase):
     """Deroule une partie complete : attract -> choix pilule rouge -> les 4
     epreuves en ordre canonique (neo_dodge, white_rabbit, no_spoon,
     bullet_stop). round_duration=8, countdown=3.
-    Transitions : neo_dodge=BULLET_TIME_REPLAY_SEC=4.5 s, bullet_stop=10 s,
-    autres=ROUND_TRANSITION_SEC=3.5 s.
+    Transition = celebration + READY_SEC (ecran "prepare-toi") :
+    neo_dodge=4.5+2=6.5 s, autres=CELEBRATION_SEC+READY_SEC=3+2=5 s. La figure
+    suivante n'est active (et detectee) qu'apres cette transition.
     Maintiens : pilule 0.9 s, dodge 0.5 s, bunny 0.9 s, cuillere 80 deg,
     bullet_stop 2.5 s (apres grace 1.5 s)."""
 
@@ -74,33 +84,33 @@ class FullPlaythroughTests(unittest.TestCase):
         self.assertEqual(event.celebration_key, "neo_dodge")
 
         # 2. Bunny ears : 2 mains au-dessus du nez, 0.95 s
-        # Neo Dodge utilise BULLET_TIME_REPLAY_SEC=4.5 s : round_transition_at=10.35,
-        # round_deadline=18.35.
+        # Neo Dodge : celebration 4.5 s + ready 2 s = 6.5 s -> round_transition_at=12.35,
+        # round_deadline=20.35. La figure n'est detectee qu'a partir de 12.35.
         ears = [bunny(0.42, 0.25), bunny(0.58, 0.28)]
-        engine.update(ears, still_pose(), 10.4, publish)
-        event = engine.update(ears, still_pose(), 11.35, publish)
+        engine.update(ears, still_pose(), 12.4, publish)
+        event = engine.update(ears, still_pose(), 13.35, publish)
         # (50 + int(50 * 7.0/8) = 43) x combo 2 = 186 -> total 281
         self.assertEqual(event.score, 281)
         self.assertIn("COMBO x2", event.flash_message)
 
         # 3. Cuillere : pince + rotation cumulee 1.5 rad > 80 deg
-        # Transition 3.5 s : round_transition_at=14.85, round_deadline=22.85.
-        engine.update([pinch(0.0)], None, 14.9, publish)
-        engine.update([pinch(0.5)], None, 15.0, publish)
-        engine.update([pinch(1.0)], None, 15.1, publish)
-        event = engine.update([pinch(1.5)], None, 15.2, publish)
+        # Transition 5 s : round_transition_at=18.35, round_deadline=26.35.
+        engine.update([pinch(0.0)], None, 18.4, publish)
+        engine.update([pinch(0.5)], None, 18.5, publish)
+        engine.update([pinch(1.0)], None, 18.6, publish)
+        event = engine.update([pinch(1.5)], None, 18.7, publish)
         # (50 + int(50 * 7.65/8) = 47) x combo 3 = 291 -> total 572
         self.assertEqual(event.score, 572)
         self.assertIn("THERE IS NO SPOON", event.flash_message)
 
         # 4. Bullet stop : grace 1.5 s, paume levee maintenue 2.55 s
-        # Transition 3.5 s : round_transition_at=18.7, round_deadline=26.7.
-        # Grace jusqu'a 18.7+1.5=20.2 ; first palm a 20.3, succes a 22.85.
-        engine.update([palm(0.5, 0.30)], None, 20.3, publish)
-        event = engine.update([palm(0.5, 0.30)], None, 22.85, publish)
+        # Transition 5 s : round_transition_at=23.7, round_deadline=31.7.
+        # Grace jusqu'a 23.7+1.5=25.2 ; first palm a 25.3, succes a 27.85.
+        engine.update([palm(0.5, 0.30)], None, 25.3, publish)
+        event = engine.update([palm(0.5, 0.30)], None, 27.85, publish)
 
         self.assertEqual(event.phase, SCORE)
-        # timer_left = 26.7 - 22.85 = 3.85 ; (50 + int(50*3.85/8)=24) x combo 4 = 296 -> total 868
+        # timer_left = 31.7 - 27.85 = 3.85 ; (50 + int(50*3.85/8)=24) x combo 4 = 296 -> total 868
         self.assertEqual(event.score, 868)
         self.assertTrue(event.new_record)
         self.assertEqual([result.success for result in event.round_results], [True] * 4)
@@ -126,9 +136,9 @@ class FullPlaythroughTests(unittest.TestCase):
         self.assertEqual(event.round_results, [])
 
     def test_neo_dodge_uses_bullet_time_window(self) -> None:
-        """Apres un succes neo_dodge, la fenetre de celebration ET la transition
-        vers la figure suivante utilisent BULLET_TIME_REPLAY_SEC. Les autres
-        figures continuent d'utiliser ROUND_TRANSITION_SEC."""
+        """La fenetre de celebration utilise BULLET_TIME_REPLAY_SEC pour neo_dodge
+        et CELEBRATION_SEC pour les autres figures ; la transition vers la figure
+        suivante ajoute READY_SEC (ecran "prepare-toi")."""
         engine = GameEngine(
             round_duration=8.0,
             countdown_duration=3.0,
@@ -147,15 +157,20 @@ class FullPlaythroughTests(unittest.TestCase):
         engine.update([], dodge_pose(), 5.85, lambda p: True)
 
         self.assertAlmostEqual(engine.state.celebration_until, 5.85 + BULLET_TIME_REPLAY_SEC)
-        self.assertAlmostEqual(engine.state.round_transition_at, 5.85 + BULLET_TIME_REPLAY_SEC)
+        self.assertAlmostEqual(
+            engine.state.round_transition_at, 5.85 + BULLET_TIME_REPLAY_SEC + READY_SEC
+        )
 
-        # Succes white_rabbit (bunny) a t=11.35 -> transition standard
+        # Succes white_rabbit (bunny) a t=13.35 (detecte apres round_transition_at=12.35)
+        # -> celebration standard CELEBRATION_SEC + transition READY_SEC
         ears = [bunny(0.42, 0.25), bunny(0.58, 0.28)]
-        engine.update(ears, still_pose(), 10.4, lambda p: True)
-        engine.update(ears, still_pose(), 11.35, lambda p: True)
+        engine.update(ears, still_pose(), 12.4, lambda p: True)
+        engine.update(ears, still_pose(), 13.35, lambda p: True)
 
-        self.assertAlmostEqual(engine.state.celebration_until, 11.35 + ROUND_TRANSITION_SEC)
-        self.assertAlmostEqual(engine.state.round_transition_at, 11.35 + ROUND_TRANSITION_SEC)
+        self.assertAlmostEqual(engine.state.celebration_until, 13.35 + CELEBRATION_SEC)
+        self.assertAlmostEqual(
+            engine.state.round_transition_at, 13.35 + CELEBRATION_SEC + READY_SEC
+        )
 
     def test_restart_after_score_shuffles_new_campaign(self) -> None:
         engine = GameEngine(round_duration=8.0, countdown_duration=3.0)
