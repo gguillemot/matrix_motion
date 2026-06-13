@@ -29,7 +29,9 @@ Les fichiers `.mp4` ne sont pas versionnés (`assets/*.mp4` est dans `.gitignore
 
 Scoring : `points = (50 + bonus vitesse jusqu'a 50) x combo`. Le **combo** (x1 a x5) compte les figures reussies d'affilee, un echec le casse. Partie moyenne ~150-400 pts, partie parfaite et rapide ~1400 pts. Le **meilleur score du jour** est persiste dans `highscore.json` et affiche sur l'ecran d'accueil (`BEST TODAY`) ; le battre declenche `NEW RECORD !`.
 
-Chaque figure reussie declenche un **effet de recompense** (~3.5 s, 10 s pour "Stop The Bullets") : bullet-time avec rejeu au ralenti et vignette noire (dodge), teinte rouge/bleue plein ecran (pilule), pluie blanche + lapin bondissant (white rabbit), distorsion de la realite (cuillere), clip video Neo stoppe les balles + onde de choc verte (bullet_stop).
+Chaque figure reussie declenche un **effet de recompense** : bullet-time avec rejeu au ralenti et vignette noire (dodge), teinte rouge/bleue plein ecran (pilule), pluie blanche + lapin bondissant (white rabbit), distorsion de la realite (cuillere), clip video Neo stoppe les balles + onde de choc verte (bullet_stop).
+
+Le passage d'une figure a la suivante se fait en deux temps, sans chevauchement : (1) la celebration joue **seule** (3 s pour les figures standard, 4.5 s de replay bullet-time pour le dodge, 10 s de clip pour Stop The Bullets), puis (2) un ecran **"PREPARE-TOI"** annonce la figure suivante (titre + consigne) pendant 2 s, chrono fige, avant que la detection ne demarre. De quoi profiter de la celebration et comprendre l'epreuve a venir.
 
 Les 5 figures (seuils geometriques documentes dans `src/challenges.py`) :
 
