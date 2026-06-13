@@ -22,11 +22,23 @@ from src.config import (
     MASK_THRESHOLD,
     PROJECT_ROOT,
     SEGMENTATION_ENABLED,
+    TRINITY_VIDEO_END,
+    TRINITY_VIDEO_START,
     AppConfig,
     parse_args,
 )
 from src.challenges import observe_hands, observe_pose
-from src.game_engine import ATTRACT, BLUE_ENDING, COUNTDOWN, IN_ROUND, INTRO, PILL_CHOICE, SCORE, GameEngine
+from src.game_engine import (
+    ATTRACT,
+    BLUE_ENDING,
+    COUNTDOWN,
+    IN_ROUND,
+    INTRO,
+    PILL_CHOICE,
+    SCORE,
+    TRINITY_OUTRO,
+    GameEngine,
+)
 from src.mqtt_client import MQTTConfig, MQTTPublisher
 from src.rendering import (
     MatrixRain,
@@ -45,8 +57,10 @@ from src.rendering import (
     draw_ready_card,
     draw_round_overlay,
     draw_bullet_stop,
+    draw_outro_qr,
     draw_score_screen,
     draw_spoon,
+    draw_trinity_outro_text,
     draw_yolo_detections,
 )
 from src.tracking import (
@@ -64,18 +78,24 @@ _FFPLAY = shutil.which("ffplay")
 def run(cfg: AppConfig) -> None:
     print("[INFO] Starting Matrix Motion")
     if not cfg.mqtt_disable and "CHANGE_" in cfg.mqtt_topic:
-        print("[INFO] MQTT topic/token still on placeholders. Set --mqtt-topic and --mqtt-token.")
+        print(
+            "[INFO] MQTT topic/token still on placeholders. Set --mqtt-topic and --mqtt-token."
+        )
 
     cap = cv2.VideoCapture(cfg.camera_index)
     if not cap.isOpened():
-        raise RuntimeError("Cannot open camera. Try --camera-index 1 or verify camera permissions.")
+        raise RuntimeError(
+            "Cannot open camera. Try --camera-index 1 or verify camera permissions."
+        )
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.height)
 
     cv2.namedWindow(cfg.window_name, cv2.WINDOW_NORMAL)
     if not cfg.windowed:
-        cv2.setWindowProperty(cfg.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        cv2.setWindowProperty(
+            cfg.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN
+        )
 
     publisher = MQTTPublisher(
         MQTTConfig(
@@ -99,7 +119,9 @@ def run(cfg: AppConfig) -> None:
     intro_path = Path(cfg.intro_video)
     has_intro = intro_path.exists()
     if has_intro:
-        print(f"[INTRO] clip found: {intro_path} ({cfg.intro_start:.0f}s -> {cfg.intro_end:.0f}s, SPACE to skip)")
+        print(
+            f"[INTRO] clip found: {intro_path} ({cfg.intro_start:.0f}s -> {cfg.intro_end:.0f}s, SPACE to skip)"
+        )
     else:
         print("[INTRO] no clip at assets/intro.mp4, intro skipped")
 
@@ -116,7 +138,9 @@ def run(cfg: AppConfig) -> None:
             try:
                 model = YOLO(cfg.model)
                 yolo_worker = YoloWorker(model, cfg.imgsz, cfg.conf)
-                print(f"[YOLO] loaded {cfg.model} (background thread, imgsz={cfg.imgsz})")
+                print(
+                    f"[YOLO] loaded {cfg.model} (background thread, imgsz={cfg.imgsz})"
+                )
             except Exception as exc:
                 print(f"[YOLO] disabled (load failed): {exc}")
 
@@ -178,6 +202,20 @@ def run(cfg: AppConfig) -> None:
         bullet_stop_video_started = 0.0
         _bullet_stop_audio: subprocess.Popen | None = None
 
+        # Lecteur du clip outro "Trinity" (phase TRINITY_OUTRO, gele sur 1:44).
+        trinity_path = PROJECT_ROOT / "assets" / "trinity.mp4"
+        has_trinity = trinity_path.exists()
+        trinity_cap: cv2.VideoCapture | None = None
+        trinity_last_frame: np.ndarray | None = None
+        trinity_started = 0.0
+        _trinity_audio: subprocess.Popen | None = None
+        trinity_clip_dur = TRINITY_VIDEO_END - TRINITY_VIDEO_START
+        # Theme de fond joue pendant toute la scene outro (en plus de l'audio natif
+        # du clip), coupe au retour en attract.
+        trinity_theme_path = PROJECT_ROOT / "assets" / "trinity_theme.m4a"
+        has_trinity_theme = trinity_theme_path.exists()
+        _trinity_theme: subprocess.Popen | None = None
+
         def start_intro_audio() -> None:
             nonlocal _audio_proc
             if _FFPLAY is None:
@@ -187,9 +225,12 @@ def run(cfg: AppConfig) -> None:
             _audio_proc = subprocess.Popen(
                 [
                     _FFPLAY,
-                    "-nodisp", "-autoexit",
-                    "-ss", str(cfg.intro_start),
-                    "-t",  str(dur),
+                    "-nodisp",
+                    "-autoexit",
+                    "-ss",
+                    str(cfg.intro_start),
+                    "-t",
+                    str(dur),
                     str(intro_path),
                 ],
                 stdout=subprocess.DEVNULL,
@@ -207,7 +248,11 @@ def run(cfg: AppConfig) -> None:
             intro_last_frame = None
 
         def start_bullet_stop_video(start_now: float) -> None:
-            nonlocal bullet_stop_cap, bullet_stop_video_active, _bullet_stop_audio, bullet_stop_video_started
+            nonlocal \
+                bullet_stop_cap, \
+                bullet_stop_video_active, \
+                _bullet_stop_audio, \
+                bullet_stop_video_started
             if not has_bullet_stop_video:
                 return
             bullet_stop_video_started = start_now
@@ -217,15 +262,26 @@ def run(cfg: AppConfig) -> None:
             if _FFPLAY is not None:
                 dur = BULLET_STOP_VIDEO_END - BULLET_STOP_VIDEO_START
                 _bullet_stop_audio = subprocess.Popen(
-                    [_FFPLAY, "-nodisp", "-autoexit",
-                     "-ss", str(BULLET_STOP_VIDEO_START), "-t", str(dur),
-                     str(bullet_stop_path)],
+                    [
+                        _FFPLAY,
+                        "-nodisp",
+                        "-autoexit",
+                        "-ss",
+                        str(BULLET_STOP_VIDEO_START),
+                        "-t",
+                        str(dur),
+                        str(bullet_stop_path),
+                    ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
 
         def close_bullet_stop_video() -> None:
-            nonlocal bullet_stop_cap, bullet_stop_last_frame, bullet_stop_video_active, _bullet_stop_audio
+            nonlocal \
+                bullet_stop_cap, \
+                bullet_stop_last_frame, \
+                bullet_stop_video_active, \
+                _bullet_stop_audio
             if _bullet_stop_audio is not None:
                 _bullet_stop_audio.terminate()
                 _bullet_stop_audio = None
@@ -234,6 +290,55 @@ def run(cfg: AppConfig) -> None:
             bullet_stop_cap = None
             bullet_stop_last_frame = None
             bullet_stop_video_active = False
+
+        def start_trinity_outro(start_now: float) -> None:
+            nonlocal trinity_cap, trinity_started, _trinity_audio, _trinity_theme
+            if not has_trinity:
+                return
+            trinity_started = start_now
+            trinity_cap = cv2.VideoCapture(str(trinity_path))
+            trinity_cap.set(cv2.CAP_PROP_POS_MSEC, TRINITY_VIDEO_START * 1000.0)
+            if _FFPLAY is not None:
+                # Audio natif du clip (whoosh bullet-time, ~3 s).
+                _trinity_audio = subprocess.Popen(
+                    [
+                        _FFPLAY,
+                        "-nodisp",
+                        "-autoexit",
+                        "-ss",
+                        str(TRINITY_VIDEO_START),
+                        "-t",
+                        str(trinity_clip_dur),
+                        str(trinity_path),
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                # Theme de fond, joue en entier (coupe au retour en attract).
+                if has_trinity_theme:
+                    _trinity_theme = subprocess.Popen(
+                        [
+                            _FFPLAY,
+                            "-nodisp",
+                            "-autoexit",
+                            str(trinity_theme_path),
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+
+        def close_trinity_outro() -> None:
+            nonlocal trinity_cap, trinity_last_frame, _trinity_audio, _trinity_theme
+            if _trinity_audio is not None:
+                _trinity_audio.terminate()
+                _trinity_audio = None
+            if _trinity_theme is not None:
+                _trinity_theme.terminate()
+                _trinity_theme = None
+            if trinity_cap is not None:
+                trinity_cap.release()
+            trinity_cap = None
+            trinity_last_frame = None
 
         while True:
             ok, frame = cap.read()
@@ -278,7 +383,7 @@ def run(cfg: AppConfig) -> None:
             replay_frame = None
             if bullet_time_active and replay_frames:
                 idx = int((now - replay_started_at) * BULLET_TIME_PLAYBACK_FPS)
-                idx = min(idx, len(replay_frames) - 1)   # fige sur la derniere frame
+                idx = min(idx, len(replay_frames) - 1)  # fige sur la derniere frame
                 replay_frame = replay_frames[idx].copy()
 
             # Clip "Neo Stops The Bullets" : demarre a la premiere frame de
@@ -298,13 +403,20 @@ def run(cfg: AppConfig) -> None:
                 if bullet_stop_video_active:
                     close_bullet_stop_video()
 
+            # Outro Trinity : libere le lecteur des qu'on quitte la phase.
+            if event.phase != TRINITY_OUTRO and trinity_cap is not None:
+                close_trinity_outro()
+
             cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
 
             # Masque personne pour le fond code rain. Calcule uniquement dans
             # les phases "Matrix" en direct (pas l'intro, pas la fin bleue, pas
             # le rejeu bullet-time qui rejoue des frames passees non segmentees).
             white_rain = event.celebration_key == "white_rabbit"
-            matrix_scene = event.phase not in (INTRO, BLUE_ENDING) and replay_frame is None
+            matrix_scene = (
+                event.phase not in (INTRO, BLUE_ENDING, TRINITY_OUTRO)
+                and replay_frame is None
+            )
             mask = None
             if mask_tracker is not None and matrix_scene:
                 mask = mask_tracker.update(mp_image, timestamp_ms, (h_frame, w_frame))
@@ -321,7 +433,9 @@ def run(cfg: AppConfig) -> None:
                 elapsed = now - intro_started
                 intro_over = elapsed >= max(0.5, cfg.intro_end - cfg.intro_start)
                 target_ms = (cfg.intro_start + elapsed) * 1000.0
-                while not intro_over and intro_cap.get(cv2.CAP_PROP_POS_MSEC) < target_ms:
+                while (
+                    not intro_over and intro_cap.get(cv2.CAP_PROP_POS_MSEC) < target_ms
+                ):
                     ok_video, video_frame = intro_cap.read()
                     if not ok_video:
                         intro_over = True
@@ -337,10 +451,47 @@ def run(cfg: AppConfig) -> None:
                     vh, vw = intro_last_frame.shape[:2]
                     scale = min(w_frame / vw, h_frame / vh)
                     new_w, new_h = int(vw * scale), int(vh * scale)
-                    resized = cv2.resize(intro_last_frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                    resized = cv2.resize(
+                        intro_last_frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR
+                    )
                     off_x, off_y = (w_frame - new_w) // 2, (h_frame - new_h) // 2
                     display[off_y : off_y + new_h, off_x : off_x + new_w] = resized
                 draw_intro_hint(display)
+                persons = faces = poses = 0
+
+            elif event.phase == TRINITY_OUTRO:
+                # Clip outro "Trinity" : joue 1:41 -> 1:44, gele sur la derniere
+                # frame, puis affiche le texte. Pilote par l'horloge murale.
+                if trinity_cap is None:
+                    start_trinity_outro(now)
+
+                elapsed = now - trinity_started
+                if trinity_cap is not None:
+                    target_ms = (
+                        TRINITY_VIDEO_START + min(elapsed, trinity_clip_dur)
+                    ) * 1000.0
+                    while trinity_cap.get(cv2.CAP_PROP_POS_MSEC) < target_ms:
+                        ok_video, video_frame = trinity_cap.read()
+                        if not ok_video:
+                            break
+                        trinity_last_frame = video_frame
+
+                display = np.zeros_like(frame)
+                if trinity_last_frame is not None:
+                    vh, vw = trinity_last_frame.shape[:2]
+                    scale = min(w_frame / vw, h_frame / vh)
+                    new_w, new_h = int(vw * scale), int(vh * scale)
+                    resized = cv2.resize(
+                        trinity_last_frame,
+                        (new_w, new_h),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+                    off_x, off_y = (w_frame - new_w) // 2, (h_frame - new_h) // 2
+                    display[off_y : off_y + new_h, off_x : off_x + new_w] = resized
+                # Texte + QR affiches une fois la frame gelee (clip termine).
+                if elapsed >= trinity_clip_dur:
+                    draw_trinity_outro_text(display)
+                    draw_outro_qr(display)
                 persons = faces = poses = 0
 
             elif event.phase == BLUE_ENDING:
@@ -354,7 +505,9 @@ def run(cfg: AppConfig) -> None:
                 # Pendant le rejeu : pas d'overlays de detection ni d'ecran de
                 # round, juste l'effet bullet-time sur les frames du passe.
                 display = replay_frame
-                persons = draw_yolo_detections(display, cached_boxes, getattr(model, "names", {}), draw=False)
+                persons = draw_yolo_detections(
+                    display, cached_boxes, getattr(model, "names", {}), draw=False
+                )
                 faces = len(face_results.detections or [])
                 poses = len(pose_results.pose_landmarks or [])
 
@@ -364,11 +517,17 @@ def run(cfg: AppConfig) -> None:
                 vh, vw = bullet_stop_last_frame.shape[:2]
                 scale = min(w_frame / vw, h_frame / vh)
                 new_w, new_h = int(vw * scale), int(vh * scale)
-                resized = cv2.resize(bullet_stop_last_frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                resized = cv2.resize(
+                    bullet_stop_last_frame,
+                    (new_w, new_h),
+                    interpolation=cv2.INTER_LINEAR,
+                )
                 off_x = (w_frame - new_w) // 2
                 off_y = (h_frame - new_h) // 2
-                display[off_y:off_y + new_h, off_x:off_x + new_w] = resized
-                persons = draw_yolo_detections(display, cached_boxes, getattr(model, "names", {}), draw=False)
+                display[off_y : off_y + new_h, off_x : off_x + new_w] = resized
+                persons = draw_yolo_detections(
+                    display, cached_boxes, getattr(model, "names", {}), draw=False
+                )
                 faces = len(face_results.detections or [])
                 poses = len(pose_results.pose_landmarks or [])
 
@@ -377,13 +536,18 @@ def run(cfg: AppConfig) -> None:
                 # segmentee. Si le masque est indisponible, on garde la frame
                 # brute et la pluie sera dessinee par-dessus plus bas (fallback).
                 if mask is not None:
-                    display = compose_matrix_scene(frame, mask, rain, boost=event.rain_boost, white=white_rain)
+                    display = compose_matrix_scene(
+                        frame, mask, rain, boost=event.rain_boost, white=white_rain
+                    )
                 else:
                     display = frame
                 # Les boites YOLO ne sont dessinees qu'en attract : pendant la
                 # partie, elles parasitent la lecture des figures.
                 persons = draw_yolo_detections(
-                    display, cached_boxes, getattr(model, "names", {}), draw=event.phase == ATTRACT
+                    display,
+                    cached_boxes,
+                    getattr(model, "names", {}),
+                    draw=event.phase == ATTRACT,
                 )
 
                 faces = draw_face_detections(display, face_results.detections)
@@ -401,7 +565,9 @@ def run(cfg: AppConfig) -> None:
                     if event.celebration_key:
                         pass  # celebration en cours : draw_celebration gere seul, pas d'overlay figure
                     elif not event.figure_active:
-                        draw_ready_card(display, event)  # ecran "prepare-toi" avant la figure
+                        draw_ready_card(
+                            display, event
+                        )  # ecran "prepare-toi" avant la figure
                     else:
                         draw_round_overlay(display, event)
                         if event.challenge_kind == "spoon":
@@ -411,7 +577,7 @@ def run(cfg: AppConfig) -> None:
                 elif event.phase == SCORE:
                     draw_score_screen(display, event)
 
-            if event.phase not in (INTRO, BLUE_ENDING):
+            if event.phase not in (INTRO, BLUE_ENDING, TRINITY_OUTRO):
                 draw_celebration(display, event)
                 # Si le masque a deja place la pluie en fond, ne pas la
                 # redessiner par-dessus (sinon on noie la personne).
@@ -426,8 +592,15 @@ def run(cfg: AppConfig) -> None:
                 fps = instant_fps if fps == 0 else (0.9 * fps + 0.1 * instant_fps)
             last_tick = tick
 
-            if event.phase not in (INTRO, BLUE_ENDING):
-                draw_hud(display, fps=fps, persons=persons, faces=faces, poses=poses, event=event)
+            if event.phase not in (INTRO, BLUE_ENDING, TRINITY_OUTRO):
+                draw_hud(
+                    display,
+                    fps=fps,
+                    persons=persons,
+                    faces=faces,
+                    poses=poses,
+                    event=event,
+                )
 
             cv2.imshow(cfg.window_name, display)
             key = cv2.waitKey(1) & 0xFF
@@ -437,17 +610,27 @@ def run(cfg: AppConfig) -> None:
             if key == 32 and event.phase == INTRO:  # ESPACE : passer l'intro
                 close_intro()
                 engine.finish_intro(time.monotonic())
+            if key == 32 and event.phase == TRINITY_OUTRO:  # ESPACE : sortir de l'outro
+                close_trinity_outro()
+                engine.skip_outro(time.monotonic())
             if key == ord("f"):
-                current = cv2.getWindowProperty(cfg.window_name, cv2.WND_PROP_FULLSCREEN)
+                current = cv2.getWindowProperty(
+                    cfg.window_name, cv2.WND_PROP_FULLSCREEN
+                )
                 if current == cv2.WINDOW_FULLSCREEN:
-                    cv2.setWindowProperty(cfg.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
+                    cv2.setWindowProperty(
+                        cfg.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL
+                    )
                 else:
-                    cv2.setWindowProperty(cfg.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                    cv2.setWindowProperty(
+                        cfg.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN
+                    )
     finally:
         publisher.close()
         try:
             close_intro()
             close_bullet_stop_video()
+            close_trinity_outro()
         except NameError:
             pass  # boucle jamais atteinte
         if yolo_worker is not None:

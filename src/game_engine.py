@@ -7,7 +7,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
-from src.config import BULLET_STOP_VIDEO_SEC, BULLET_TIME_REPLAY_SEC
+from src.config import (
+    BULLET_STOP_VIDEO_SEC,
+    BULLET_TIME_REPLAY_SEC,
+    TRINITY_FREEZE_HOLD_SEC,
+    TRINITY_VIDEO_END,
+    TRINITY_VIDEO_START,
+)
 from src.challenges import (
     BULLET_STOP_GRACE_SEC,
     BULLET_STOP_HOLD_SEC,
@@ -33,6 +39,17 @@ BLUE_ENDING = "BLUE_ENDING"
 COUNTDOWN = "COUNTDOWN"
 IN_ROUND = "IN_ROUND"
 SCORE = "SCORE"
+TRINITY_OUTRO = "TRINITY_OUTRO"
+
+# Outro "Trinity" : l'ecran de score reste visible SCORE_HOLD_SEC APRES la fin de
+# la celebration de la derniere figure (sinon, une figure finale a longue
+# celebration -- ex. le clip bullet_stop de 10 s -- recouvrirait tout l'ecran de
+# score). Ensuite on enchaine sur le clip Trinity (gele + texte) pour
+# TRINITY_OUTRO_DURATION avant le retour auto a l'attract (ESPACE court-circuite).
+SCORE_HOLD_SEC = 3.0
+TRINITY_OUTRO_DURATION = (
+    TRINITY_VIDEO_END - TRINITY_VIDEO_START
+) + TRINITY_FREEZE_HOLD_SEC
 
 # Le choix des pilules et la fin "pilule bleue" n'ont pas de timer de jeu,
 # mais un timeout d'inactivite ramene a l'attract si le passant est parti.
@@ -160,7 +177,9 @@ class GameEngine:
         self.victory_pill = victory_pill
         self._rng = rng or random.Random()
         self._fixed_campaign = campaign
-        self.challenges: list[Challenge] = list(campaign) if campaign else build_breizhcamp_campaign(self._rng)
+        self.challenges: list[Challenge] = (
+            list(campaign) if campaign else build_breizhcamp_campaign(self._rng)
+        )
         self._best_score_path = Path(best_score_path) if best_score_path else None
         self.best_score = self._load_best_score()
 
@@ -207,6 +226,12 @@ class GameEngine:
             self.state.phase_entered_at = now
             self._pill_hold.reset()
 
+    def skip_outro(self, now: float) -> None:
+        """Appele par la boucle principale (touche ESPACE) pour court-circuiter
+        l'outro Trinity et revenir tout de suite a l'attract."""
+        if self.state.phase == TRINITY_OUTRO:
+            self._go_attract(now)
+
     def _go_attract(self, now: float) -> None:
         self.state.phase = ATTRACT
         self.state.phase_entered_at = now
@@ -222,11 +247,34 @@ class GameEngine:
         self._now = now
         state = self.state
 
-        if state.phase in (ATTRACT, SCORE, BLUE_ENDING):
-            if state.phase == BLUE_ENDING and now - state.phase_entered_at >= BLUE_ENDING_IDLE_SEC:
+        if state.phase in (ATTRACT, BLUE_ENDING):
+            if (
+                state.phase == BLUE_ENDING
+                and now - state.phase_entered_at >= BLUE_ENDING_IDLE_SEC
+            ):
                 self._go_attract(now)
                 return self._snapshot()
             self._update_start_hold(hands, now)
+            return self._snapshot()
+
+        if state.phase == SCORE:
+            # Rejouer reste possible pendant tout l'affichage des scores. L'outro
+            # ne demarre que SCORE_HOLD_SEC apres la fin de la celebration de la
+            # derniere figure (celebration_until), pour garantir un ecran de score
+            # propre et visible meme apres une figure a longue celebration.
+            self._update_start_hold(hands, now)
+            score_visible_since = max(state.phase_entered_at, state.celebration_until)
+            if state.phase == SCORE and now - score_visible_since >= SCORE_HOLD_SEC:
+                state.phase = TRINITY_OUTRO
+                state.phase_entered_at = now
+                state.start_hold_since = None
+            return self._snapshot()
+
+        if state.phase == TRINITY_OUTRO:
+            # La lecture du clip est pilotee par la boucle principale (comme INTRO) ;
+            # ici on ne gere que le retour automatique a l'attract.
+            if now - state.phase_entered_at >= TRINITY_OUTRO_DURATION:
+                self._go_attract(now)
             return self._snapshot()
 
         if state.phase == INTRO:
@@ -353,13 +401,17 @@ class GameEngine:
             # Posture tenue DODGE_HOLD_SEC : le joueur a le temps de se voir
             # en esquive, pas de validation sur un simple passage.
             active = dodge_matches(pose)
-            validated, progress = self._dodge_hold.update("dodge" if active else None, now)
+            validated, progress = self._dodge_hold.update(
+                "dodge" if active else None, now
+            )
             self._figure_progress = progress
             return validated is not None, message
 
         if challenge.kind == "bunny":
             active = bunny_ears_active(hands, pose)
-            validated, progress = self._bunny_hold.update("bunny" if active else None, now)
+            validated, progress = self._bunny_hold.update(
+                "bunny" if active else None, now
+            )
             self._figure_progress = progress
             return validated is not None, message
 
@@ -375,7 +427,9 @@ class GameEngine:
                 return False, message
             anchor = bullet_stop_palm(hands)
             self._palm_anchor = anchor
-            validated, progress = self._bullet_stop.update("stop" if anchor else None, now)
+            validated, progress = self._bullet_stop.update(
+                "stop" if anchor else None, now
+            )
             self._figure_progress = progress
             return validated is not None, message
 
@@ -406,7 +460,9 @@ class GameEngine:
         if self._best_score_path is None or not self._best_score_path.exists():
             return 0
         try:
-            return int(json.loads(self._best_score_path.read_text()).get("best_score", 0))
+            return int(
+                json.loads(self._best_score_path.read_text()).get("best_score", 0)
+            )
         except (ValueError, OSError, AttributeError):
             return 0
 
@@ -414,7 +470,9 @@ class GameEngine:
         if self._best_score_path is None:
             return
         try:
-            self._best_score_path.write_text(json.dumps({"best_score": self.best_score}))
+            self._best_score_path.write_text(
+                json.dumps({"best_score": self.best_score})
+            )
         except OSError as exc:
             print(f"[SCORE] could not persist best score: {exc}")
 
@@ -439,17 +497,25 @@ class GameEngine:
             display_round = 0
 
         flash = state.flash_message if now < state.flash_until else ""
-        countdown_value = max(0, math.ceil(state.countdown_until - now)) if state.phase == COUNTDOWN else 0
+        countdown_value = (
+            max(0, math.ceil(state.countdown_until - now))
+            if state.phase == COUNTDOWN
+            else 0
+        )
         start_hold_progress = 0.0
         if state.start_hold_since is not None:
-            start_hold_progress = min(1.0, (now - state.start_hold_since) / START_HOLD_SEC)
+            start_hold_progress = min(
+                1.0, (now - state.start_hold_since) / START_HOLD_SEC
+            )
 
         celebration_key = ""
         celebration_progress = 0.0
         if state.celebration_key and now < state.celebration_until:
             celebration_key = state.celebration_key
             window = max(1e-6, state.celebration_until - state.celebration_started_at)
-            celebration_progress = min(1.0, max(0.0, (now - state.celebration_started_at) / window))
+            celebration_progress = min(
+                1.0, max(0.0, (now - state.celebration_started_at) / window)
+            )
 
         return GameEvent(
             phase=state.phase,
@@ -474,7 +540,8 @@ class GameEngine:
             palm_anchor=self._palm_anchor,
             start_hold_progress=start_hold_progress,
             chosen_pill=state.chosen_pill,
-            rain_boost=state.phase in (ATTRACT, SCORE) or bool(flash),  # BLUE_ENDING/INTRO : pas de pluie (bypass dans main)
+            rain_boost=state.phase in (ATTRACT, SCORE)
+            or bool(flash),  # BLUE_ENDING/INTRO : pas de pluie (bypass dans main)
             combo=state.combo,
             celebration_key=celebration_key,
             celebration_progress=celebration_progress,
