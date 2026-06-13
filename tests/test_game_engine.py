@@ -214,10 +214,11 @@ class GameEngineTests(unittest.TestCase):
     def test_celebration_runs_during_transition_then_stops(self) -> None:
         engine = make_engine()
         start_red_game(engine)
-        success = succeed_dodge(engine, 4.2)  # transition jusqu'a 7.15
+        # Neo Dodge : succes a 4.75, fenetre BULLET_TIME_REPLAY_SEC=4.5 s -> jusqu'a 9.25
+        success = succeed_dodge(engine, 4.2)
 
         during = engine.update([], None, 5.7, lambda pill: True)
-        after = engine.update([], None, 7.4, lambda pill: True)
+        after = engine.update([], None, 9.3, lambda pill: True)
 
         self.assertEqual(success.celebration_key, "neo_dodge")
         self.assertEqual(during.celebration_key, "neo_dodge")
@@ -227,7 +228,8 @@ class GameEngineTests(unittest.TestCase):
     def test_detection_paused_during_round_transition(self) -> None:
         engine = make_engine()
         start_red_game(engine)
-        succeed_dodge(engine, 4.2)  # transition jusqu'a 7.15
+        # Neo Dodge : fenetre BULLET_TIME_REPLAY_SEC=4.5 s -> transition jusqu'a 9.25
+        succeed_dodge(engine, 4.2)
 
         event = engine.update([], dodge_pose(), 5.7, lambda pill: True)
 
