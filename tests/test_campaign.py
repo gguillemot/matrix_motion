@@ -30,9 +30,11 @@ def dodge_pose() -> PoseObservation:
 class FullPlaythroughTests(unittest.TestCase):
     """Deroule une partie complete : attract -> choix pilule rouge -> les 4
     epreuves en ordre canonique (neo_dodge, white_rabbit, no_spoon,
-    smith_scan). round_duration=8, countdown=3.
-    Transitions : neo_dodge=BULLET_TIME_REPLAY_SEC=4.5 s, autres=2.4 s.
-    Maintiens : pilule 0.9 s, dodge 0.5 s, bunny 0.9 s, cuillere 80 deg."""
+    bullet_stop). round_duration=8, countdown=3.
+    Transitions : neo_dodge=BULLET_TIME_REPLAY_SEC=4.5 s, bullet_stop=10 s,
+    autres=ROUND_TRANSITION_SEC=3.5 s.
+    Maintiens : pilule 0.9 s, dodge 0.5 s, bunny 0.9 s, cuillere 80 deg,
+    bullet_stop 2.5 s (apres grace 1.5 s)."""
 
     def test_red_pill_full_run(self) -> None:
         calls: list[str] = []
@@ -82,23 +84,24 @@ class FullPlaythroughTests(unittest.TestCase):
         self.assertIn("COMBO x2", event.flash_message)
 
         # 3. Cuillere : pince + rotation cumulee 1.5 rad > 80 deg
-        # Transition standard 2.4 s : round_transition_at=13.75, round_deadline=21.75.
-        engine.update([pinch(0.0)], None, 13.8, publish)
-        engine.update([pinch(0.5)], None, 13.9, publish)
-        engine.update([pinch(1.0)], None, 14.0, publish)
-        event = engine.update([pinch(1.5)], None, 14.1, publish)
+        # Transition 3.5 s : round_transition_at=14.85, round_deadline=22.85.
+        engine.update([pinch(0.0)], None, 14.9, publish)
+        engine.update([pinch(0.5)], None, 15.0, publish)
+        engine.update([pinch(1.0)], None, 15.1, publish)
+        event = engine.update([pinch(1.5)], None, 15.2, publish)
         # (50 + int(50 * 7.65/8) = 47) x combo 3 = 291 -> total 572
         self.assertEqual(event.score, 572)
         self.assertIn("THERE IS NO SPOON", event.flash_message)
 
-        # 4. Scan : immobile 2.1 s
-        # Transition standard 2.4 s : round_transition_at=16.5, round_deadline=24.5.
-        engine.update([], still_pose(), 16.6, publish)
-        event = engine.update([], still_pose(), 18.7, publish)
+        # 4. Bullet stop : grace 1.5 s, paume levee maintenue 2.55 s
+        # Transition 3.5 s : round_transition_at=18.7, round_deadline=26.7.
+        # Grace jusqu'a 18.7+1.5=20.2 ; first palm a 20.3, succes a 22.85.
+        engine.update([palm(0.5, 0.30)], None, 20.3, publish)
+        event = engine.update([palm(0.5, 0.30)], None, 22.85, publish)
 
         self.assertEqual(event.phase, SCORE)
-        # timer_left = 24.5 - 18.7 = 5.8 ; (50 + int(50*5.8/8)=36) x combo 4 = 344 -> total 916
-        self.assertEqual(event.score, 916)
+        # timer_left = 26.7 - 22.85 = 3.85 ; (50 + int(50*3.85/8)=24) x combo 4 = 296 -> total 868
+        self.assertEqual(event.score, 868)
         self.assertTrue(event.new_record)
         self.assertEqual([result.success for result in event.round_results], [True] * 4)
         # Pas de seconde publication au score : la pilule part au choix

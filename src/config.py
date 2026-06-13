@@ -58,6 +58,14 @@ BULLET_TIME_BUFFER_FRAMES = 48
 # tres ralenti. 11 fps sur ~2 s de footage capture a ~22 fps => ~2x slow motion.
 BULLET_TIME_PLAYBACK_FPS = 11.0
 
+# ---------------------------------------------------------------------------
+# "Neo Stops The Bullets" : clip video joue a la reussite de la figure
+# ---------------------------------------------------------------------------
+# Duree de la fenetre celebration + transition = duree du clip (10 s).
+BULLET_STOP_VIDEO_SEC   = 10.0
+BULLET_STOP_VIDEO_START = 130.0  # 2:10 dans le fichier source
+BULLET_STOP_VIDEO_END   = 140.0  # 2:20
+
 
 @dataclass(slots=True)
 class AppConfig:

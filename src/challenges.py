@@ -51,12 +51,12 @@ SPOON_BEND_TARGET_RAD = math.radians(80.0)
 # rotation du joueur : on l'ignore pour ne pas gonfler le cumul.
 SPOON_MAX_STEP_RAD = 0.6
 
-# Agent Smith : immobilite totale. Le nez ne doit pas deriver de plus de 8 %
-# de l'envergure d'epaules (~2.5 % de l'image) autour de sa position de
-# reference pendant SCAN_HOLD_SEC : tolere juste le jitter du tracker, le
-# moindre mouvement volontaire fait disparaitre les lunettes et relance le scan.
-SCAN_MAX_DRIFT_RATIO = 0.08
-SCAN_HOLD_SEC = 2.0
+# Neo Stops The Bullets : une paume ouverte LEVEE (palm_y au-dessus du milieu)
+# maintenue BULLET_STOP_HOLD_SEC. Les balles convergent et se figent pendant le
+# maintien ; la jauge pleine = Neo arrete les balles.
+BULLET_STOP_PALM_MAX_Y = 0.60
+BULLET_STOP_HOLD_SEC   = 2.5   # maintien exige pour arreter les balles
+BULLET_STOP_GRACE_SEC  = 1.5   # grace en debut de round : evite la validation par carry-over
 
 
 # ---------------------------------------------------------------------------
@@ -134,13 +134,13 @@ _BREIZHCAMP_FIGURES: list[Challenge] = [
         success_message="THERE IS NO SPOON",
     ),
     Challenge(
-        key="smith_scan",
-        title="Agent Smith",
-        prompt="Ne bouge plus... scan en cours",
-        kind="scan",
+        key="bullet_stop",
+        title="Stop The Bullets",
+        prompt="Leve la paume ouverte... arrete les balles !",
+        kind="bullet_stop",
         duration_sec=8.0,
-        background_asset="agent_smith.png",
-        success_message="SCAN COMPLETE, MR. ANDERSON",
+        background_asset="bullet_stop.png",
+        success_message="YOU ARE THE ONE",
     ),
 ]
 
@@ -413,6 +413,16 @@ def bunny_ears_active(hands: Sequence[HandObservation], pose: PoseObservation | 
     return len(ears) >= 2
 
 
+def bullet_stop_palm(hands: Sequence[HandObservation]) -> tuple[float, float] | None:
+    """Renvoie (x, y) de la paume ouverte levee qui arrete les balles, ou None.
+    Sert a la fois a valider la figure et a ancrer le rendu des balles.
+    (image en miroir : coords = ce que voit le joueur.)"""
+    for hand in hands:
+        if hand.gesture == "open_palm" and hand.palm_y < BULLET_STOP_PALM_MAX_Y:
+            return (hand.palm_x, hand.palm_y)
+    return None
+
+
 class HoldTracker:
     """Valide une condition maintenue `duration` secondes sans interruption.
 
@@ -481,34 +491,6 @@ class SpoonTracker:
         self._last_angle = self.angle
         return self.progress
 
-
-class ScanTracker:
-    """Progression d'immobilite : nez stable pendant SCAN_HOLD_SEC."""
-
-    def __init__(self) -> None:
-        self._ref: tuple[float, float] | None = None
-        self._since = 0.0
-
-    def reset(self) -> None:
-        self._ref = None
-
-    def update(self, pose: PoseObservation | None, now: float) -> float:
-        if pose is None:
-            self._ref = None
-            return 0.0
-        if self._ref is None:
-            self._ref = (pose.nose_x, pose.nose_y)
-            self._since = now
-            return 0.0
-
-        span = max(pose.shoulder_span, 1e-6)
-        drift = math.hypot(pose.nose_x - self._ref[0], pose.nose_y - self._ref[1]) / span
-        if drift > SCAN_MAX_DRIFT_RATIO:
-            # Mouvement volontaire : on re-ancre et le scan repart de zero.
-            self._ref = (pose.nose_x, pose.nose_y)
-            self._since = now
-            return 0.0
-        return min(1.0, (now - self._since) / SCAN_HOLD_SEC)
 
 
 # ---------------------------------------------------------------------------

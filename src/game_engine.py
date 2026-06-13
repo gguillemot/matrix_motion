@@ -7,8 +7,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
-from src.config import BULLET_TIME_REPLAY_SEC
+from src.config import BULLET_STOP_VIDEO_SEC, BULLET_TIME_REPLAY_SEC
 from src.challenges import (
+    BULLET_STOP_GRACE_SEC,
+    BULLET_STOP_HOLD_SEC,
     BUNNY_HOLD_SEC,
     DODGE_HOLD_SEC,
     PILL_HOLD_SEC,
@@ -16,9 +18,9 @@ from src.challenges import (
     HandObservation,
     HoldTracker,
     PoseObservation,
-    ScanTracker,
     SpoonTracker,
     build_breizhcamp_campaign,
+    bullet_stop_palm,
     bunny_ears_active,
     dodge_matches,
     pill_hover,
@@ -51,7 +53,7 @@ MAX_COMBO = 5
 START_HOLD_SEC = 1.0
 # Pause entre deux figures : fenetre de celebration ou l'effet visuel de
 # recompense se joue, avant la figure suivante.
-ROUND_TRANSITION_SEC = 2.4
+ROUND_TRANSITION_SEC = 3.5
 FLASH_DURATION_SEC = 2.2
 
 TIMEOUT_MESSAGE = "TOO SLOW..."
@@ -105,6 +107,7 @@ class GameEvent:
     pill_hover: str | None = None
     spoon_anchor: tuple[float, float] | None = None
     spoon_angle: float = 0.0
+    palm_anchor: tuple[float, float] | None = None
     start_hold_progress: float = 0.0
     chosen_pill: str | None = None
     rain_boost: bool = False
@@ -155,7 +158,8 @@ class GameEngine:
         self._bunny_hold = HoldTracker(BUNNY_HOLD_SEC)
         self._dodge_hold = HoldTracker(DODGE_HOLD_SEC)
         self._spoon = SpoonTracker()
-        self._scan = ScanTracker()
+        self._bullet_stop = HoldTracker(BULLET_STOP_HOLD_SEC)
+        self._palm_anchor: tuple[float, float] | None = None
         self._figure_progress = 0.0
         self._pill_hover: str | None = None
         self._now = 0.0
@@ -279,7 +283,12 @@ class GameEngine:
             self._set_flash(message, now)
             state.celebration_key = challenge.key
             state.celebration_started_at = now
-            transition = BULLET_TIME_REPLAY_SEC if challenge.key == "neo_dodge" else ROUND_TRANSITION_SEC
+            if challenge.key == "neo_dodge":
+                transition = BULLET_TIME_REPLAY_SEC
+            elif challenge.key == "bullet_stop":
+                transition = BULLET_STOP_VIDEO_SEC
+            else:
+                transition = ROUND_TRANSITION_SEC
             state.celebration_until = now + transition
             self._advance(now, transition)
             return self._snapshot()
@@ -311,7 +320,8 @@ class GameEngine:
         self._bunny_hold.reset()
         self._dodge_hold.reset()
         self._spoon.reset()
-        self._scan.reset()
+        self._bullet_stop.reset()
+        self._palm_anchor = None
         self._figure_progress = 0.0
         self._pill_hover = None
 
@@ -325,6 +335,7 @@ class GameEngine:
         message = challenge.success_message
         self._figure_progress = 0.0
         self._pill_hover = None
+        self._palm_anchor = None
 
         if challenge.kind == "dodge":
             # Posture tenue DODGE_HOLD_SEC : le joueur a le temps de se voir
@@ -345,10 +356,16 @@ class GameEngine:
             self._figure_progress = progress
             return progress >= 1.0, message
 
-        if challenge.kind == "scan":
-            progress = self._scan.update(pose, now)
+        if challenge.kind == "bullet_stop":
+            # Grace : ignore la paume pendant les premieres secondes du round
+            # pour eviter une validation involontaire depuis le decompte.
+            if now < self.state.round_transition_at + BULLET_STOP_GRACE_SEC:
+                return False, message
+            anchor = bullet_stop_palm(hands)
+            self._palm_anchor = anchor
+            validated, progress = self._bullet_stop.update("stop" if anchor else None, now)
             self._figure_progress = progress
-            return progress >= 1.0, message
+            return validated is not None, message
 
         return False, message
 
@@ -436,6 +453,7 @@ class GameEngine:
             pill_hover=self._pill_hover,
             spoon_anchor=self._spoon.anchor,
             spoon_angle=self._spoon.angle,
+            palm_anchor=self._palm_anchor,
             start_hold_progress=start_hold_progress,
             chosen_pill=state.chosen_pill,
             rain_boost=state.phase in (ATTRACT, SCORE) or bool(flash),  # BLUE_ENDING/INTRO : pas de pluie (bypass dans main)

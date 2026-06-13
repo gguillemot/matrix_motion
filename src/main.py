@@ -12,6 +12,8 @@ import numpy as np
 from ultralytics import YOLO
 
 from src.config import (
+    BULLET_STOP_VIDEO_END,
+    BULLET_STOP_VIDEO_START,
     BULLET_TIME_BUFFER_FRAMES,
     BULLET_TIME_PLAYBACK_FPS,
     MASK_BLUR_KSIZE,
@@ -29,7 +31,6 @@ from src.mqtt_client import MQTTConfig, MQTTPublisher
 from src.rendering import (
     MatrixRain,
     compose_matrix_scene,
-    draw_agent_glasses,
     draw_attract_screen,
     draw_blue_ending,
     draw_celebration,
@@ -42,6 +43,7 @@ from src.rendering import (
     draw_pill_choice,
     draw_pose_skeleton,
     draw_round_overlay,
+    draw_bullet_stop,
     draw_score_screen,
     draw_spoon,
     draw_yolo_detections,
@@ -166,6 +168,15 @@ def run(cfg: AppConfig) -> None:
         intro_last_frame: np.ndarray | None = None
         _audio_proc: subprocess.Popen | None = None
 
+        # Lecteur du clip "Neo Stops The Bullets" (celebration bullet_stop).
+        bullet_stop_path = PROJECT_ROOT / "assets" / "stop_bullet.mp4"
+        has_bullet_stop_video = bullet_stop_path.exists()
+        bullet_stop_cap: cv2.VideoCapture | None = None
+        bullet_stop_last_frame: np.ndarray | None = None
+        bullet_stop_video_active = False
+        bullet_stop_video_started = 0.0
+        _bullet_stop_audio: subprocess.Popen | None = None
+
         def start_intro_audio() -> None:
             nonlocal _audio_proc
             if _FFPLAY is None:
@@ -193,6 +204,35 @@ def run(cfg: AppConfig) -> None:
                 intro_cap.release()
             intro_cap = None
             intro_last_frame = None
+
+        def start_bullet_stop_video(start_now: float) -> None:
+            nonlocal bullet_stop_cap, bullet_stop_video_active, _bullet_stop_audio, bullet_stop_video_started
+            if not has_bullet_stop_video:
+                return
+            bullet_stop_video_started = start_now
+            bullet_stop_cap = cv2.VideoCapture(str(bullet_stop_path))
+            bullet_stop_cap.set(cv2.CAP_PROP_POS_MSEC, BULLET_STOP_VIDEO_START * 1000.0)
+            bullet_stop_video_active = True
+            if _FFPLAY is not None:
+                dur = BULLET_STOP_VIDEO_END - BULLET_STOP_VIDEO_START
+                _bullet_stop_audio = subprocess.Popen(
+                    [_FFPLAY, "-nodisp", "-autoexit",
+                     "-ss", str(BULLET_STOP_VIDEO_START), "-t", str(dur),
+                     str(bullet_stop_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+
+        def close_bullet_stop_video() -> None:
+            nonlocal bullet_stop_cap, bullet_stop_last_frame, bullet_stop_video_active, _bullet_stop_audio
+            if _bullet_stop_audio is not None:
+                _bullet_stop_audio.terminate()
+                _bullet_stop_audio = None
+            if bullet_stop_cap is not None:
+                bullet_stop_cap.release()
+            bullet_stop_cap = None
+            bullet_stop_last_frame = None
+            bullet_stop_video_active = False
 
         while True:
             ok, frame = cap.read()
@@ -239,6 +279,23 @@ def run(cfg: AppConfig) -> None:
                 idx = int((now - replay_started_at) * BULLET_TIME_PLAYBACK_FPS)
                 idx = min(idx, len(replay_frames) - 1)   # fige sur la derniere frame
                 replay_frame = replay_frames[idx].copy()
+
+            # Clip "Neo Stops The Bullets" : demarre a la premiere frame de
+            # celebration et lit jusqu'a la fin de la fenetre (10 s).
+            if event.celebration_key == "bullet_stop":
+                if not bullet_stop_video_active:
+                    start_bullet_stop_video(now)
+                if bullet_stop_cap is not None:
+                    elapsed = now - bullet_stop_video_started
+                    target_ms = (BULLET_STOP_VIDEO_START + elapsed) * 1000.0
+                    while bullet_stop_cap.get(cv2.CAP_PROP_POS_MSEC) < target_ms:
+                        ok_v, vframe = bullet_stop_cap.read()
+                        if not ok_v:
+                            break
+                        bullet_stop_last_frame = vframe
+            else:
+                if bullet_stop_video_active:
+                    close_bullet_stop_video()
 
             cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
 
@@ -299,6 +356,21 @@ def run(cfg: AppConfig) -> None:
                 persons = draw_yolo_detections(display, cached_boxes, getattr(model, "names", {}), draw=False)
                 faces = len(face_results.detections or [])
                 poses = len(pose_results.pose_landmarks or [])
+
+            elif bullet_stop_last_frame is not None:
+                # Clip "Neo stops the bullets" : remplace la camera pendant la celebration.
+                display = np.zeros_like(frame)
+                vh, vw = bullet_stop_last_frame.shape[:2]
+                scale = min(w_frame / vw, h_frame / vh)
+                new_w, new_h = int(vw * scale), int(vh * scale)
+                resized = cv2.resize(bullet_stop_last_frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                off_x = (w_frame - new_w) // 2
+                off_y = (h_frame - new_h) // 2
+                display[off_y:off_y + new_h, off_x:off_x + new_w] = resized
+                persons = draw_yolo_detections(display, cached_boxes, getattr(model, "names", {}), draw=False)
+                faces = len(face_results.detections or [])
+                poses = len(pose_results.pose_landmarks or [])
+
             else:
                 # Scene signature : la pluie de code tombe DERRIERE la personne
                 # segmentee. Si le masque est indisponible, on garde la frame
@@ -313,11 +385,7 @@ def run(cfg: AppConfig) -> None:
                     display, cached_boxes, getattr(model, "names", {}), draw=event.phase == ATTRACT
                 )
 
-                scanning = event.phase == IN_ROUND and event.challenge_kind == "scan"
-                if scanning:
-                    faces = draw_agent_glasses(display, face_results.detections, event.figure_progress)
-                else:
-                    faces = draw_face_detections(display, face_results.detections)
+                faces = draw_face_detections(display, face_results.detections)
 
                 draw_hand_detections(display, hand_results, w_frame, h_frame)
                 poses = draw_pose_skeleton(display, pose_results, w_frame, h_frame)
@@ -332,6 +400,8 @@ def run(cfg: AppConfig) -> None:
                     draw_round_overlay(display, event)
                     if event.challenge_kind == "spoon":
                         draw_spoon(display, event)
+                    elif event.challenge_kind == "bullet_stop":
+                        draw_bullet_stop(display, event)
                 elif event.phase == SCORE:
                     draw_score_screen(display, event)
 
@@ -371,6 +441,7 @@ def run(cfg: AppConfig) -> None:
         publisher.close()
         try:
             close_intro()
+            close_bullet_stop_video()
         except NameError:
             pass  # boucle jamais atteinte
         if yolo_worker is not None:
