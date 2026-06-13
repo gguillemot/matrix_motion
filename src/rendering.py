@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from src.challenges import HAND_CONNECTIONS, PILL_ZONES
+from src.config import FOREGROUND_GREEN_TINT, RAIN_BACKGROUND_COLOR
 from src.game_engine import GameEvent
 
 MATRIX_GREEN = (40, 255, 90)
@@ -43,8 +44,12 @@ class MatrixRain:
         self.drops = [random.randint(-height, 0) for _ in range(self.columns)]
         self.charset = string.digits
 
-    def draw(self, frame: np.ndarray, boost: bool = False, white: bool = False) -> None:
-        overlay = np.zeros_like(frame)
+    def _render(self, canvas: np.ndarray, boost: bool = False, white: bool = False) -> None:
+        """Dessine la pluie sur `canvas` et avance les gouttes d'une frame.
+
+        Mutualise par `draw` (overlay par-dessus la camera, mode legacy/fallback)
+        et `render_background` (image de fond plein cadre, mode segmentation).
+        """
         speed = 25 if boost else 14
 
         for col in range(self.columns):
@@ -60,13 +65,63 @@ class MatrixRain:
                 # Pluie blanche pendant la celebration "Follow the White Rabbit"
                 color = (brightness, brightness, brightness) if white else (35, brightness, 70)
 
-                cv2.putText(overlay, char, (x, trail_y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
+                cv2.putText(canvas, char, (x, trail_y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
 
             self.drops[col] += speed
             if self.drops[col] > self.height + random.randint(0, 150):
                 self.drops[col] = random.randint(-140, 0)
 
+    def draw(self, frame: np.ndarray, boost: bool = False, white: bool = False) -> None:
+        """Mode legacy/fallback : pluie semi-transparente par-dessus la camera."""
+        overlay = np.zeros_like(frame)
+        self._render(overlay, boost=boost, white=white)
         cv2.addWeighted(overlay, 0.35, frame, 1.0, 0, frame)
+
+    def render_background(self, boost: bool = False, white: bool = False) -> np.ndarray:
+        """Mode segmentation : image plein cadre de la pluie sur fond noir teinte.
+
+        Sert de calque de fond derriere la personne segmentee : les caracteres
+        sont a pleine luminosite (vrai look Matrix), pas attenues comme en
+        overlay.
+        """
+        canvas = np.empty((self.height, self.width, 3), dtype=np.uint8)
+        canvas[:] = RAIN_BACKGROUND_COLOR
+        self._render(canvas, boost=boost, white=white)
+        return canvas
+
+
+def compose_matrix_scene(
+    frame: np.ndarray,
+    mask: np.ndarray | None,
+    rain: MatrixRain,
+    boost: bool = False,
+    white: bool = False,
+) -> np.ndarray:
+    """Compose la scene signature : personne au premier plan, pluie en fond.
+
+    `mask` est un masque de presence personne lisse (float HxW, 0..1). Si
+    `mask` est None (segmentation indisponible), on retombe proprement sur
+    l'ancien rendu (camera + pluie par-dessus).
+    """
+    rain_bg = rain.render_background(boost=boost, white=white)
+
+    if mask is None:
+        display = frame.copy()
+        rain.draw(display, boost=boost, white=white)
+        return display
+
+    # La personne reste en couleur, avec un leger virage vert pour l'integrer
+    # dans la Matrice (on pousse le canal vert, on attenue rouge/bleu).
+    foreground = frame.astype(np.float32)
+    if FOREGROUND_GREEN_TINT > 0:
+        tint = FOREGROUND_GREEN_TINT
+        foreground[:, :, 0] *= 1.0 - 0.5 * tint  # bleu
+        foreground[:, :, 1] = np.minimum(255.0, foreground[:, :, 1] * (1.0 + tint))  # vert
+        foreground[:, :, 2] *= 1.0 - 0.4 * tint  # rouge
+
+    m = mask[:, :, None]
+    composed = foreground * m + rain_bg.astype(np.float32) * (1.0 - m)
+    return composed.astype(np.uint8)
 
 
 def add_scanlines(frame: np.ndarray, step: int = 4) -> None:

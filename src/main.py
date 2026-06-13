@@ -11,14 +11,22 @@ import mediapipe as mp
 import numpy as np
 from ultralytics import YOLO
 
-_FFPLAY = shutil.which("ffplay")
-
-from src.config import PROJECT_ROOT, AppConfig, parse_args
+from src.config import (
+    MASK_BLUR_KSIZE,
+    MASK_INVERT,
+    MASK_SMOOTHING,
+    MASK_THRESHOLD,
+    PROJECT_ROOT,
+    SEGMENTATION_ENABLED,
+    AppConfig,
+    parse_args,
+)
 from src.challenges import observe_hands, observe_pose
 from src.game_engine import ATTRACT, BLUE_ENDING, COUNTDOWN, IN_ROUND, INTRO, PILL_CHOICE, SCORE, GameEngine
 from src.mqtt_client import MQTTConfig, MQTTPublisher
 from src.rendering import (
     MatrixRain,
+    compose_matrix_scene,
     draw_agent_glasses,
     draw_attract_screen,
     draw_blue_ending,
@@ -36,7 +44,16 @@ from src.rendering import (
     draw_spoon,
     draw_yolo_detections,
 )
-from src.tracking import YoloWorker, create_face_detector, create_hand_landmarker, create_pose_landmarker
+from src.tracking import (
+    PersonMaskTracker,
+    YoloWorker,
+    create_face_detector,
+    create_hand_landmarker,
+    create_image_segmenter,
+    create_pose_landmarker,
+)
+
+_FFPLAY = shutil.which("ffplay")
 
 
 def run(cfg: AppConfig) -> None:
@@ -71,6 +88,8 @@ def run(cfg: AppConfig) -> None:
     hand_landmarker = None
     face_detector = None
     pose_landmarker = None
+    segmenter = None
+    mask_tracker: PersonMaskTracker | None = None
     rain = None
     intro_path = Path(cfg.intro_video)
     has_intro = intro_path.exists()
@@ -99,6 +118,26 @@ def run(cfg: AppConfig) -> None:
         hand_landmarker = create_hand_landmarker()
         face_detector = create_face_detector()
         pose_landmarker = create_pose_landmarker()
+
+        # Segmentation pour le fond "code rain" derriere la personne. Si le
+        # modele ou la lib echoue, on retombe proprement sur l'ancienne pluie
+        # par-dessus la camera (mask_tracker reste None).
+        if SEGMENTATION_ENABLED:
+            try:
+                segmenter = create_image_segmenter()
+                mask_tracker = PersonMaskTracker(
+                    segmenter,
+                    smoothing=MASK_SMOOTHING,
+                    threshold=MASK_THRESHOLD,
+                    blur_ksize=MASK_BLUR_KSIZE,
+                    invert=MASK_INVERT,
+                )
+                print("[SEG] selfie segmenter loaded (code rain behind person)")
+            except Exception as exc:
+                print(f"[SEG] disabled (load failed): {exc} -- fallback rain overlay")
+                segmenter = None
+                mask_tracker = None
+
         video_start_ts = time.perf_counter()
 
         ret, frame = cap.read()
@@ -200,6 +239,15 @@ def run(cfg: AppConfig) -> None:
 
             cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
 
+            # Masque personne pour le fond code rain. Calcule uniquement dans
+            # les phases "Matrix" en direct (pas l'intro, pas la fin bleue, pas
+            # le rejeu bullet-time qui rejoue des frames passees non segmentees).
+            white_rain = event.celebration_key == "white_rabbit"
+            matrix_scene = event.phase not in (INTRO, BLUE_ENDING) and replay_frame is None
+            mask = None
+            if mask_tracker is not None and matrix_scene:
+                mask = mask_tracker.update(mp_image, timestamp_ms, (h_frame, w_frame))
+
             if event.phase == INTRO:
                 # Clip d'intro : la camera et le moteur continuent de tourner,
                 # seul l'affichage est remplace par la video (sans audio).
@@ -249,7 +297,13 @@ def run(cfg: AppConfig) -> None:
                 faces = len(face_results.detections or [])
                 poses = len(pose_results.pose_landmarks or [])
             else:
-                display = frame
+                # Scene signature : la pluie de code tombe DERRIERE la personne
+                # segmentee. Si le masque est indisponible, on garde la frame
+                # brute et la pluie sera dessinee par-dessus plus bas (fallback).
+                if mask is not None:
+                    display = compose_matrix_scene(frame, mask, rain, boost=event.rain_boost, white=white_rain)
+                else:
+                    display = frame
                 # Les boites YOLO ne sont dessinees qu'en attract : pendant la
                 # partie, elles parasitent la lecture des figures.
                 persons = draw_yolo_detections(
@@ -280,7 +334,10 @@ def run(cfg: AppConfig) -> None:
 
             if event.phase not in (INTRO, BLUE_ENDING):
                 draw_celebration(display, event)
-                rain.draw(display, boost=event.rain_boost, white=event.celebration_key == "white_rabbit")
+                # Si le masque a deja place la pluie en fond, ne pas la
+                # redessiner par-dessus (sinon on noie la personne).
+                if mask is None:
+                    rain.draw(display, boost=event.rain_boost, white=white_rain)
                 draw_flash(display, event)
 
             tick = time.perf_counter()
@@ -321,6 +378,8 @@ def run(cfg: AppConfig) -> None:
             face_detector.close()
         if pose_landmarker is not None:
             pose_landmarker.close()
+        if segmenter is not None:
+            segmenter.close()
         cap.release()
         cv2.destroyAllWindows()
 
