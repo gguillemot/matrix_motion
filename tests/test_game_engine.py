@@ -4,7 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.challenges import PILL_ZONES, HandObservation, PoseObservation, build_breizhcamp_campaign
+from src.challenges import (
+    PILL_ZONES,
+    HandObservation,
+    PoseObservation,
+    build_breizhcamp_campaign,
+)
 from src.game_engine import (
     ATTRACT,
     BLUE_ENDING,
@@ -13,16 +18,23 @@ from src.game_engine import (
     INTRO,
     PILL_CHOICE,
     SCORE,
+    SCORE_HOLD_SEC,
+    TRINITY_OUTRO,
+    TRINITY_OUTRO_DURATION,
     GameEngine,
 )
 
 
 def palm(x: float = 0.5, y: float = 0.5) -> HandObservation:
-    return HandObservation(gesture="open_palm", palm_x=x, palm_y=y, is_pinch=False, hand_angle=0.0)
+    return HandObservation(
+        gesture="open_palm", palm_x=x, palm_y=y, is_pinch=False, hand_angle=0.0
+    )
 
 
 def dodge_pose() -> PoseObservation:
-    return PoseObservation(nose_x=0.20, shoulder_center_x=0.52, shoulder_span=0.40, nose_y=0.4)
+    return PoseObservation(
+        nose_x=0.20, shoulder_center_x=0.52, shoulder_span=0.40, nose_y=0.4
+    )
 
 
 def make_engine(**kwargs) -> GameEngine:
@@ -207,7 +219,9 @@ class GameEngineTests(unittest.TestCase):
         first = succeed_dodge(engine, 4.2)
         self.assertEqual(first.combo, 1)
 
-        event = engine.update([], None, engine.state.round_deadline + 0.1, lambda pill: True)
+        event = engine.update(
+            [], None, engine.state.round_deadline + 0.1, lambda pill: True
+        )
 
         self.assertEqual(event.combo, 0)
 
@@ -262,10 +276,67 @@ class GameEngineTests(unittest.TestCase):
         engine = make_engine()
         engine.start_game(0.0)
         engine.state.phase = SCORE
+        engine.state.phase_entered_at = 10.0  # ecran de score affiche a t=10
         engine.state.score = 300
 
+        # Rejouer reste possible pendant la fenetre de score (avant l'outro).
         engine.update([palm(), palm()], None, 10.0, lambda pill: True)
         event = engine.update([palm(), palm()], None, 11.05, lambda pill: True)
 
         self.assertEqual(event.phase, PILL_CHOICE)
         self.assertEqual(event.score, 0)
+
+    def test_score_advances_to_trinity_outro(self) -> None:
+        engine = make_engine()
+        engine.start_game(0.0)
+        engine.state.phase = SCORE
+        engine.state.phase_entered_at = 10.0
+
+        before = engine.update([], None, 10.0 + SCORE_HOLD_SEC - 0.1, lambda pill: True)
+        after = engine.update([], None, 10.0 + SCORE_HOLD_SEC + 0.1, lambda pill: True)
+
+        self.assertEqual(before.phase, SCORE)
+        self.assertEqual(after.phase, TRINITY_OUTRO)
+
+    def test_score_hold_waits_for_final_celebration(self) -> None:
+        # Une celebration finale qui deborde sur l'ecran de score retarde l'outro :
+        # le compte des SCORE_HOLD_SEC ne demarre qu'apres celebration_until.
+        engine = make_engine()
+        engine.start_game(0.0)
+        engine.state.phase = SCORE
+        engine.state.phase_entered_at = 10.0
+        engine.state.celebration_until = 20.0  # celebration finale jusqu'a t=20
+
+        during = engine.update([], None, 19.9, lambda pill: True)  # celeb pas finie
+        just_after = engine.update(
+            [], None, 20.0 + SCORE_HOLD_SEC - 0.1, lambda pill: True
+        )
+        done = engine.update([], None, 20.0 + SCORE_HOLD_SEC + 0.1, lambda pill: True)
+
+        self.assertEqual(during.phase, SCORE)
+        self.assertEqual(just_after.phase, SCORE)
+        self.assertEqual(done.phase, TRINITY_OUTRO)
+
+    def test_trinity_outro_returns_to_attract(self) -> None:
+        engine = make_engine()
+        engine.state.phase = TRINITY_OUTRO
+        engine.state.phase_entered_at = 20.0
+
+        still = engine.update(
+            [], None, 20.0 + TRINITY_OUTRO_DURATION - 0.1, lambda pill: True
+        )
+        done = engine.update(
+            [], None, 20.0 + TRINITY_OUTRO_DURATION + 0.1, lambda pill: True
+        )
+
+        self.assertEqual(still.phase, TRINITY_OUTRO)
+        self.assertEqual(done.phase, ATTRACT)
+
+    def test_skip_outro_returns_to_attract(self) -> None:
+        engine = make_engine()
+        engine.state.phase = TRINITY_OUTRO
+        engine.state.phase_entered_at = 20.0
+
+        engine.skip_outro(21.0)
+
+        self.assertEqual(engine.state.phase, ATTRACT)

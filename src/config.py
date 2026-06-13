@@ -62,9 +62,17 @@ BULLET_TIME_PLAYBACK_FPS = 11.0
 # "Neo Stops The Bullets" : clip video joue a la reussite de la figure
 # ---------------------------------------------------------------------------
 # Duree de la fenetre celebration + transition = duree du clip (10 s).
-BULLET_STOP_VIDEO_SEC   = 10.0
+BULLET_STOP_VIDEO_SEC = 10.0
 BULLET_STOP_VIDEO_START = 130.0  # 2:10 dans le fichier source
-BULLET_STOP_VIDEO_END   = 140.0  # 2:20
+BULLET_STOP_VIDEO_END = 140.0  # 2:20
+
+# ---------------------------------------------------------------------------
+# "Trinity" : clip outro joue 4 s apres l'ecran de score, gele sur la derniere
+# frame (1:44) avec son natif en guise d'effet bullet-time sci-fi, puis texte.
+# ---------------------------------------------------------------------------
+TRINITY_VIDEO_START = 101.0  # 1:41
+TRINITY_VIDEO_END = 104.0  # 1:44
+TRINITY_FREEZE_HOLD_SEC = 10.0  # duree du gel + texte avant retour auto a l'attract
 
 
 @dataclass(slots=True)
@@ -112,21 +120,55 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mqtt-port", type=int, default=1883)
     parser.add_argument("--mqtt-topic", type=str, default="")
     parser.add_argument("--mqtt-token", type=str, default="")
-    parser.add_argument("--mqtt-client-id", type=str, default=f"matrix-motion-{random.randint(1000, 9999)}")
-    parser.add_argument("--sequence-length", type=int, choices=(5, 10), default=5,
-                        help="(legacy) ignore par le mode jeu BreizhCamp, qui joue toujours les 5 figures")
-    parser.add_argument("--victory-pill", type=str, choices=("auto", "red", "blue"), default="auto",
-                        help="pilule MQTT par defaut si la figure pilule n'a pas ete reussie")
-    parser.add_argument("--round-duration", type=float, default=8.0,
-                        help="duree en secondes laissee pour reussir chaque figure")
-    parser.add_argument("--countdown-duration", type=float, default=3.0,
-                        help="duree du decompte 3-2-1 avant la premiere figure")
-    parser.add_argument("--intro-video", type=str, default=str(PROJECT_ROOT / "assets" / "intro.mp4"),
-                        help="clip video local joue avant le choix des pilules (saute si absent)")
-    parser.add_argument("--intro-start", type=float, default=164.0,
-                        help="debut du segment du clip d'intro, en secondes (2:44)")
-    parser.add_argument("--intro-end", type=float, default=178.0,
-                        help="fin du segment du clip d'intro, en secondes (2:58)")
+    parser.add_argument(
+        "--mqtt-client-id",
+        type=str,
+        default=f"matrix-motion-{random.randint(1000, 9999)}",
+    )
+    parser.add_argument(
+        "--sequence-length",
+        type=int,
+        choices=(5, 10),
+        default=5,
+        help="(legacy) ignore par le mode jeu BreizhCamp, qui joue toujours les 5 figures",
+    )
+    parser.add_argument(
+        "--victory-pill",
+        type=str,
+        choices=("auto", "red", "blue"),
+        default="auto",
+        help="pilule MQTT par defaut si la figure pilule n'a pas ete reussie",
+    )
+    parser.add_argument(
+        "--round-duration",
+        type=float,
+        default=8.0,
+        help="duree en secondes laissee pour reussir chaque figure",
+    )
+    parser.add_argument(
+        "--countdown-duration",
+        type=float,
+        default=3.0,
+        help="duree du decompte 3-2-1 avant la premiere figure",
+    )
+    parser.add_argument(
+        "--intro-video",
+        type=str,
+        default=str(PROJECT_ROOT / "assets" / "intro.mp4"),
+        help="clip video local joue avant le choix des pilules (saute si absent)",
+    )
+    parser.add_argument(
+        "--intro-start",
+        type=float,
+        default=164.0,
+        help="debut du segment du clip d'intro, en secondes (2:44)",
+    )
+    parser.add_argument(
+        "--intro-end",
+        type=float,
+        default=178.0,
+        help="fin du segment du clip d'intro, en secondes (2:58)",
+    )
     return parser
 
 

@@ -8,9 +8,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 from src.challenges import HAND_CONNECTIONS, PILL_ZONES
-from src.config import FOREGROUND_GREEN_TINT, RAIN_BACKGROUND_COLOR
+from src.config import FOREGROUND_GREEN_TINT, PROJECT_ROOT, RAIN_BACKGROUND_COLOR
 from src.game_engine import GameEvent
 
 MATRIX_GREEN = (40, 255, 90)
@@ -19,23 +20,54 @@ MATRIX_PALE_GREEN = (190, 255, 190)
 HUD_BG = (10, 25, 10)
 PILL_COLORS = {"red": (60, 60, 255), "blue": (255, 140, 40)}  # BGR
 
+# Texte de l'outro Trinity, affiche sur la frame gelee (1:44). Accents inclus :
+# rendu via Pillow car cv2.putText / HERSHEY ne gere pas les caracteres accentues.
+TRINITY_OUTRO_TEXT = (
+    "Attends Neo, avant de te retourner, passe saluer Juliette à côté "
+    "et mesure toi à elle pour savoir si tu es prêt à rejoindre nos équipes..."
+)
+
+# Polices TrueType candidates (macOS) pour le texte accentue ; fallback bitmap.
+_PIL_FONT_CANDIDATES = (
+    "/System/Library/Fonts/HelveticaNeue.ttc",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+)
+_pil_font_cache: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
+
+# QR code "formulaire de contact" incruste sur la droite de la frame gelee de
+# l'outro. Charge/redimensionne une seule fois (cache par taille cible).
+_QR_PATH = PROJECT_ROOT / "assets" / "QRCode pour Formulaire de contact rapide.png"
+_qr_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+
 POSE_CONNECTIONS = [
     (11, 12),
-    (11, 13), (13, 15),
-    (12, 14), (14, 16),
-    (11, 23), (12, 24),
+    (11, 13),
+    (13, 15),
+    (12, 14),
+    (14, 16),
+    (11, 23),
+    (12, 24),
     (23, 24),
-    (23, 25), (25, 27),
-    (24, 26), (26, 28),
-    (15, 17), (17, 19), (19, 21),
-    (16, 18), (18, 20), (20, 22),
+    (23, 25),
+    (25, 27),
+    (24, 26),
+    (26, 28),
+    (15, 17),
+    (17, 19),
+    (19, 21),
+    (16, 18),
+    (18, 20),
+    (20, 22),
 ]
 
 POSE_BODY_LANDMARKS = range(11, 33)
 
 
 class MatrixRain:
-    def __init__(self, width: int, height: int, spacing: int = 12, trail_length: int = 4) -> None:
+    def __init__(
+        self, width: int, height: int, spacing: int = 12, trail_length: int = 4
+    ) -> None:
         self.width = width
         self.height = height
         self.spacing = spacing
@@ -44,7 +76,9 @@ class MatrixRain:
         self.drops = [random.randint(-height, 0) for _ in range(self.columns)]
         self.charset = string.digits
 
-    def _render(self, canvas: np.ndarray, boost: bool = False, white: bool = False) -> None:
+    def _render(
+        self, canvas: np.ndarray, boost: bool = False, white: bool = False
+    ) -> None:
         """Dessine la pluie sur `canvas` et avance les gouttes d'une frame.
 
         Mutualise par `draw` (overlay par-dessus la camera, mode legacy/fallback)
@@ -63,9 +97,22 @@ class MatrixRain:
                 char = random.choice(self.charset)
                 brightness = max(95, 255 - trail_idx * 35)
                 # Pluie blanche pendant la celebration "Follow the White Rabbit"
-                color = (brightness, brightness, brightness) if white else (35, brightness, 70)
+                color = (
+                    (brightness, brightness, brightness)
+                    if white
+                    else (35, brightness, 70)
+                )
 
-                cv2.putText(canvas, char, (x, trail_y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
+                cv2.putText(
+                    canvas,
+                    char,
+                    (x, trail_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.48,
+                    color,
+                    1,
+                    cv2.LINE_AA,
+                )
 
             self.drops[col] += speed
             if self.drops[col] > self.height + random.randint(0, 150):
@@ -116,7 +163,9 @@ def compose_matrix_scene(
     if FOREGROUND_GREEN_TINT > 0:
         tint = FOREGROUND_GREEN_TINT
         foreground[:, :, 0] *= 1.0 - 0.5 * tint  # bleu
-        foreground[:, :, 1] = np.minimum(255.0, foreground[:, :, 1] * (1.0 + tint))  # vert
+        foreground[:, :, 1] = np.minimum(
+            255.0, foreground[:, :, 1] * (1.0 + tint)
+        )  # vert
         foreground[:, :, 2] *= 1.0 - 0.4 * tint  # rouge
 
     m = mask[:, :, None]
@@ -146,12 +195,162 @@ def _put_centered(
     (text_w, _), _ = cv2.getTextSize(text, font, scale, thickness)
     x = max(10, (frame.shape[1] - text_w) // 2)
     if glow:
-        cv2.putText(frame, text, (x, y), font, scale, MATRIX_DARK_GREEN, thickness + 4, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            text,
+            (x, y),
+            font,
+            scale,
+            MATRIX_DARK_GREEN,
+            thickness + 4,
+            cv2.LINE_AA,
+        )
     cv2.putText(frame, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
 
 
 def _darken(frame: np.ndarray, alpha: float) -> None:
     cv2.addWeighted(np.zeros_like(frame), alpha, frame, 1.0 - alpha, 0, frame)
+
+
+def _pil_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Charge (et met en cache) une police TrueType pour le texte accentue.
+
+    Retombe sur la police bitmap par defaut de Pillow si aucune TTF n'est
+    disponible (le rendu reste correct, juste plus petit).
+    """
+    cached = _pil_font_cache.get(size)
+    if cached is not None:
+        return cached
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None = None
+    for candidate in _PIL_FONT_CANDIDATES:
+        if Path(candidate).exists():
+            try:
+                font = ImageFont.truetype(candidate, size)
+                break
+            except OSError:
+                continue
+    if font is None:
+        font = ImageFont.load_default()
+    _pil_font_cache[size] = font
+    return font
+
+
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> list[str]:
+    """Coupe `text` en lignes ne depassant pas `max_width` pixels (word-wrap)."""
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        candidate = f"{current} {word}".strip()
+        if draw.textlength(candidate, font=font) <= max_width or not current:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _put_paragraph_pil(
+    frame: np.ndarray,
+    text: str,
+    center_y: int,
+    font_size: int = 30,
+    color: tuple[int, int, int] = MATRIX_GREEN,
+    width_ratio: float = 0.82,
+) -> None:
+    """Dessine un paragraphe accentue centre via Pillow (gere é, à, ô, ê...).
+
+    `color` est en BGR (convention OpenCV) ; on convertit en RGB pour PIL.
+    `frame` est modifie en place. Un contour sombre ameliore la lisibilite.
+    """
+    h, w = frame.shape[:2]
+    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(image)
+    font = _pil_font(font_size)
+
+    max_width = int(w * width_ratio)
+    lines = _wrap_text(draw, text, font, max_width)
+    line_height = int(font_size * 1.35)
+    total_height = line_height * len(lines)
+    y = center_y - total_height // 2
+
+    rgb = (color[2], color[1], color[0])
+    outline = (10, 40, 18)
+    for line in lines:
+        line_w = draw.textlength(line, font=font)
+        x = (w - line_w) / 2
+        draw.text(
+            (x, y), line, font=font, fill=rgb, stroke_width=3, stroke_fill=outline
+        )
+        y += line_height
+
+    frame[:] = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+
+
+def draw_trinity_outro_text(frame: np.ndarray) -> None:
+    """Texte de l'outro Trinity sur la frame gelee (1:44)."""
+    _darken(frame, 0.35)
+    _put_paragraph_pil(frame, TRINITY_OUTRO_TEXT, center_y=int(frame.shape[0] * 0.78))
+
+
+def _load_qr(size: int) -> tuple[np.ndarray, np.ndarray] | None:
+    """Charge le QR redimensionne en `size`x`size` -> (BGR, alpha 0..1). Cache."""
+    cached = _qr_cache.get(size)
+    if cached is not None:
+        return cached
+    if not _QR_PATH.exists():
+        return None
+    raw = cv2.imread(str(_QR_PATH), cv2.IMREAD_UNCHANGED)
+    if raw is None:
+        return None
+    raw = cv2.resize(raw, (size, size), interpolation=cv2.INTER_AREA)
+    if raw.shape[2] == 4:
+        bgr = raw[:, :, :3]
+        alpha = raw[:, :, 3].astype(np.float32) / 255.0
+    else:
+        bgr = raw[:, :, :3]
+        alpha = np.ones((size, size), dtype=np.float32)
+    result = (bgr, alpha)
+    _qr_cache[size] = result
+    return result
+
+
+def draw_outro_qr(frame: np.ndarray) -> None:
+    """Incruste le QR code "contact" sur la droite de la frame gelee de l'outro.
+
+    Pose un panneau clair semi-opaque (zone calme + contraste pour rester
+    scannable sur la video sombre), un liseré vert Matrix, puis composite le QR
+    via son canal alpha. Place en haut/milieu a droite pour ne pas chevaucher le
+    texte (bande basse ~0.78).
+    """
+    h, w = frame.shape[:2]
+    qr_size = int(h * 0.34)
+    loaded = _load_qr(qr_size)
+    if loaded is None:
+        return
+    qr_bgr, qr_alpha = loaded
+
+    pad = max(10, qr_size // 12)
+    margin = 40
+    x0 = w - qr_size - pad - margin
+    y0 = int(h * 0.16)
+    x1, y1 = x0 + qr_size + 2 * pad, y0 + qr_size + 2 * pad
+    if x0 < 0 or y1 > h:
+        return
+
+    # Panneau clair semi-opaque (fond + zone calme), liseré vert.
+    panel = frame[y0:y1, x0:x1]
+    white = np.full_like(panel, 235)
+    cv2.addWeighted(white, 0.85, panel, 0.15, 0, panel)
+    cv2.rectangle(frame, (x0, y0), (x1 - 1, y1 - 1), MATRIX_GREEN, 2, cv2.LINE_AA)
+
+    # Composite alpha du QR par-dessus le panneau.
+    qx, qy = x0 + pad, y0 + pad
+    roi = frame[qy : qy + qr_size, qx : qx + qr_size].astype(np.float32)
+    a = qr_alpha[:, :, None]
+    blended = qr_bgr.astype(np.float32) * a + roi * (1.0 - a)
+    frame[qy : qy + qr_size, qx : qx + qr_size] = blended.astype(np.uint8)
 
 
 def _blink(period: float = 0.8) -> bool:
@@ -178,13 +377,19 @@ def _draw_progress_bar(
 # ---------------------------------------------------------------------------
 
 
-def draw_yolo_detections(frame: np.ndarray, cached_boxes: list, model_names, draw: bool = True) -> int:
+def draw_yolo_detections(
+    frame: np.ndarray, cached_boxes: list, model_names, draw: bool = True
+) -> int:
     persons = 0
 
     for box in cached_boxes:
         cls_id = int(box.cls[0])
         conf = float(box.conf[0])
-        label = model_names.get(cls_id, str(cls_id)) if hasattr(model_names, "get") else str(cls_id)
+        label = (
+            model_names.get(cls_id, str(cls_id))
+            if hasattr(model_names, "get")
+            else str(cls_id)
+        )
 
         if label == "person":
             persons += 1
@@ -196,7 +401,16 @@ def draw_yolo_detections(frame: np.ndarray, cached_boxes: list, model_names, dra
         cv2.rectangle(frame, (x1, y1), (x2, y2), MATRIX_GREEN, 2)
         cv2.rectangle(frame, (x1 + 2, y1 + 2), (x2 - 2, y2 - 2), MATRIX_DARK_GREEN, 1)
         text = f"{label} {conf:.2f}"
-        cv2.putText(frame, text, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, MATRIX_GREEN, 2, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            text,
+            (x1, max(20, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            MATRIX_GREEN,
+            2,
+            cv2.LINE_AA,
+        )
 
     return persons
 
@@ -214,7 +428,9 @@ def draw_face_detections(frame: np.ndarray, detections) -> int:
     return faces
 
 
-def draw_pose_skeleton(frame: np.ndarray, pose_results, frame_width: int, frame_height: int) -> int:
+def draw_pose_skeleton(
+    frame: np.ndarray, pose_results, frame_width: int, frame_height: int
+) -> int:
     poses = 0
 
     if pose_results.pose_landmarks:
@@ -237,7 +453,9 @@ def draw_pose_skeleton(frame: np.ndarray, pose_results, frame_width: int, frame_
     return poses
 
 
-def draw_hand_detections(frame: np.ndarray, hand_results, frame_width: int, frame_height: int) -> int:
+def draw_hand_detections(
+    frame: np.ndarray, hand_results, frame_width: int, frame_height: int
+) -> int:
     hands = 0
 
     if hand_results.hand_landmarks:
@@ -267,19 +485,50 @@ def draw_attract_screen(frame: np.ndarray, event: GameEvent) -> None:
     height, _ = frame.shape[:2]
     _darken(frame, 0.45)
 
-    _put_centered(frame, "ENTER THE MATRIX", height // 2 - 70, 2.2, MATRIX_GREEN, 4, glow=True)
+    _put_centered(
+        frame, "ENTER THE MATRIX", height // 2 - 70, 2.2, MATRIX_GREEN, 4, glow=True
+    )
     if _blink(1.4):
-        _put_centered(frame, "WAKE UP, NEO...", height // 2, 1.0, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
+        _put_centered(
+            frame,
+            "WAKE UP, NEO...",
+            height // 2,
+            1.0,
+            MATRIX_PALE_GREEN,
+            2,
+            cv2.FONT_HERSHEY_SIMPLEX,
+        )
     if _blink(0.8) or event.start_hold_progress > 0:
-        _put_centered(frame, "MONTRE TES 2 PAUMES POUR COMMENCER", height // 2 + 80, 0.95, MATRIX_GREEN, 2)
+        _put_centered(
+            frame,
+            "MONTRE TES 2 PAUMES POUR COMMENCER",
+            height // 2 + 80,
+            0.95,
+            MATRIX_GREEN,
+            2,
+        )
 
     if event.start_hold_progress > 0:
         bar_width = 320
-        _draw_progress_bar(frame, (frame.shape[1] - bar_width) // 2, height // 2 + 110, bar_width, 14, event.start_hold_progress)
+        _draw_progress_bar(
+            frame,
+            (frame.shape[1] - bar_width) // 2,
+            height // 2 + 110,
+            bar_width,
+            14,
+            event.start_hold_progress,
+        )
 
     # L'accroche competitive du stand
     if event.best_score > 0:
-        _put_centered(frame, f"BEST TODAY : {event.best_score}", height // 2 + 170, 1.0, MATRIX_PALE_GREEN, 2)
+        _put_centered(
+            frame,
+            f"BEST TODAY : {event.best_score}",
+            height // 2 + 170,
+            1.0,
+            MATRIX_PALE_GREEN,
+            2,
+        )
 
 
 def draw_countdown(frame: np.ndarray, event: GameEvent) -> None:
@@ -290,7 +539,9 @@ def draw_countdown(frame: np.ndarray, event: GameEvent) -> None:
     fraction = time.monotonic() % 1.0
     scale = 5.0 + 1.5 * fraction
     _put_centered(frame, "GET READY", height // 2 - 130, 1.1, MATRIX_PALE_GREEN, 2)
-    _put_centered(frame, str(value), height // 2 + 70, scale, MATRIX_GREEN, 10, glow=True)
+    _put_centered(
+        frame, str(value), height // 2 + 70, scale, MATRIX_GREEN, 10, glow=True
+    )
 
 
 def draw_ready_card(frame: np.ndarray, event: GameEvent) -> None:
@@ -302,7 +553,13 @@ def draw_ready_card(frame: np.ndarray, event: GameEvent) -> None:
 
     _put_centered(frame, "PREPARE-TOI", height // 2 - 150, 1.1, MATRIX_PALE_GREEN, 2)
     _put_centered(
-        frame, event.challenge_title.upper(), height // 2 - 60, 1.7, MATRIX_GREEN, 3, glow=True
+        frame,
+        event.challenge_title.upper(),
+        height // 2 - 60,
+        1.7,
+        MATRIX_GREEN,
+        3,
+        glow=True,
     )
     _put_centered(
         frame,
@@ -314,7 +571,9 @@ def draw_ready_card(frame: np.ndarray, event: GameEvent) -> None:
         font=cv2.FONT_HERSHEY_SIMPLEX,
     )
     countdown = max(1, math.ceil(event.round_starts_in))
-    _put_centered(frame, str(countdown), height // 2 + 140, 2.5, MATRIX_GREEN, 6, glow=True)
+    _put_centered(
+        frame, str(countdown), height // 2 + 140, 2.5, MATRIX_GREEN, 6, glow=True
+    )
 
 
 def draw_round_overlay(frame: np.ndarray, event: GameEvent) -> None:
@@ -322,9 +581,36 @@ def draw_round_overlay(frame: np.ndarray, event: GameEvent) -> None:
 
     # Bandeau figure (sous le HUD)
     round_label = f"ROUND {event.round_index}/{event.round_total}"
-    cv2.putText(frame, round_label, (24, 116), cv2.FONT_HERSHEY_DUPLEX, 0.85, MATRIX_GREEN, 2, cv2.LINE_AA)
-    cv2.putText(frame, event.challenge_title.upper(), (24, 158), cv2.FONT_HERSHEY_DUPLEX, 1.15, MATRIX_GREEN, 2, cv2.LINE_AA)
-    cv2.putText(frame, event.challenge_prompt, (24, 196), cv2.FONT_HERSHEY_SIMPLEX, 0.78, MATRIX_PALE_GREEN, 2, cv2.LINE_AA)
+    cv2.putText(
+        frame,
+        round_label,
+        (24, 116),
+        cv2.FONT_HERSHEY_DUPLEX,
+        0.85,
+        MATRIX_GREEN,
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        event.challenge_title.upper(),
+        (24, 158),
+        cv2.FONT_HERSHEY_DUPLEX,
+        1.15,
+        MATRIX_GREEN,
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        event.challenge_prompt,
+        (24, 196),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.78,
+        MATRIX_PALE_GREEN,
+        2,
+        cv2.LINE_AA,
+    )
 
     # Progression de la figure (maintien pilule/bunny, cuillere, scan)
     if event.figure_progress > 0:
@@ -335,7 +621,9 @@ def draw_round_overlay(frame: np.ndarray, event: GameEvent) -> None:
     timer_color = MATRIX_GREEN if event.timer_left > 2.0 else (60, 60, 255)
     bar_margin = 24
     bar_y = height - 46
-    _draw_progress_bar(frame, bar_margin, bar_y, width - 2 * bar_margin, 16, ratio, timer_color)
+    _draw_progress_bar(
+        frame, bar_margin, bar_y, width - 2 * bar_margin, 16, ratio, timer_color
+    )
     cv2.putText(
         frame,
         f"{event.timer_left:0.1f}s",
@@ -372,7 +660,16 @@ def draw_pills(frame: np.ndarray, event: GameEvent) -> None:
 
         label = name.upper()
         (text_w, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_DUPLEX, 0.8, 2)
-        cv2.putText(frame, label, (cx - text_w // 2, cy + 78), cv2.FONT_HERSHEY_DUPLEX, 0.8, color, 2, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            label,
+            (cx - text_w // 2, cy + 78),
+            cv2.FONT_HERSHEY_DUPLEX,
+            0.8,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
 
 
 def draw_pill_choice(frame: np.ndarray, event: GameEvent) -> None:
@@ -387,13 +684,37 @@ def draw_pill_choice(frame: np.ndarray, event: GameEvent) -> None:
         label = legends[name]
         (text_w, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
         cx, cy = int(zone_x * width), int(zone_y * height)
-        cv2.putText(frame, label, (cx - text_w // 2, cy + 108), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_PALE_GREEN, 2, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            label,
+            (cx - text_w // 2, cy + 108),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            MATRIX_PALE_GREEN,
+            2,
+            cv2.LINE_AA,
+        )
 
     if event.figure_progress > 0:
         bar_width = 320
-        _draw_progress_bar(frame, (width - bar_width) // 2, height - 70, bar_width, 14, event.figure_progress)
+        _draw_progress_bar(
+            frame,
+            (width - bar_width) // 2,
+            height - 70,
+            bar_width,
+            14,
+            event.figure_progress,
+        )
     elif _blink(0.8):
-        _put_centered(frame, "PAUME OUVERTE SUR UNE PILULE", height - 64, 0.85, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
+        _put_centered(
+            frame,
+            "PAUME OUVERTE SUR UNE PILULE",
+            height - 64,
+            0.85,
+            MATRIX_PALE_GREEN,
+            2,
+            cv2.FONT_HERSHEY_SIMPLEX,
+        )
 
 
 def draw_blue_ending(frame: np.ndarray, event: GameEvent) -> None:
@@ -402,18 +723,51 @@ def draw_blue_ending(frame: np.ndarray, event: GameEvent) -> None:
     height, width = frame.shape[:2]
 
     _put_centered(frame, "RETOUR A LA REALITE", 90, 1.1, (235, 235, 235), 2)
-    _put_centered(frame, "L'HISTOIRE S'ARRETE ICI...", 135, 0.75, (180, 180, 180), 2, cv2.FONT_HERSHEY_SIMPLEX)
+    _put_centered(
+        frame,
+        "L'HISTOIRE S'ARRETE ICI...",
+        135,
+        0.75,
+        (180, 180, 180),
+        2,
+        cv2.FONT_HERSHEY_SIMPLEX,
+    )
 
     if _blink(1.0) or event.start_hold_progress > 0:
-        _put_centered(frame, "2 PAUMES OUVERTES POUR RETOURNER DANS LA MATRICE", height - 64, 0.8, (210, 210, 210), 2, cv2.FONT_HERSHEY_SIMPLEX)
+        _put_centered(
+            frame,
+            "2 PAUMES OUVERTES POUR RETOURNER DANS LA MATRICE",
+            height - 64,
+            0.8,
+            (210, 210, 210),
+            2,
+            cv2.FONT_HERSHEY_SIMPLEX,
+        )
     if event.start_hold_progress > 0:
         bar_width = 320
-        _draw_progress_bar(frame, (width - bar_width) // 2, height - 44, bar_width, 12, event.start_hold_progress, (220, 220, 220))
+        _draw_progress_bar(
+            frame,
+            (width - bar_width) // 2,
+            height - 44,
+            bar_width,
+            12,
+            event.start_hold_progress,
+            (220, 220, 220),
+        )
 
 
 def draw_intro_hint(frame: np.ndarray) -> None:
     if _blink(1.2):
-        cv2.putText(frame, "ESPACE POUR PASSER", (24, frame.shape[0] - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            "ESPACE POUR PASSER",
+            (24, frame.shape[0] - 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (200, 200, 200),
+            1,
+            cv2.LINE_AA,
+        )
 
 
 def draw_spoon(frame: np.ndarray, event: GameEvent) -> None:
@@ -448,7 +802,16 @@ def draw_spoon(frame: np.ndarray, event: GameEvent) -> None:
     tip_angle = math.degrees(math.atan2(tip_y - prev_y, tip_x - prev_x)) + 90
     bowl_axes = (int(height * 0.06), int(height * 0.085))
     cv2.ellipse(frame, (tip_x, tip_y), bowl_axes, tip_angle, 0, 360, (60, 60, 70), -1)
-    cv2.ellipse(frame, (tip_x, tip_y), (bowl_axes[0] - 5, bowl_axes[1] - 5), tip_angle, 0, 360, (225, 225, 235), -1)
+    cv2.ellipse(
+        frame,
+        (tip_x, tip_y),
+        (bowl_axes[0] - 5, bowl_axes[1] - 5),
+        tip_angle,
+        0,
+        360,
+        (225, 225, 235),
+        -1,
+    )
     cv2.ellipse(
         frame,
         (tip_x - bowl_axes[0] // 3, tip_y - bowl_axes[1] // 3),
@@ -462,7 +825,15 @@ def draw_spoon(frame: np.ndarray, event: GameEvent) -> None:
 
     if event.spoon_anchor is None:
         if _blink(0.8):
-            _put_centered(frame, "PINCE POUCE + INDEX ET TOURNE LA MAIN", height - 90, 0.85, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
+            _put_centered(
+                frame,
+                "PINCE POUCE + INDEX ET TOURNE LA MAIN",
+                height - 90,
+                0.85,
+                MATRIX_PALE_GREEN,
+                2,
+                cv2.FONT_HERSHEY_SIMPLEX,
+            )
         return
 
     # Rayon de telekinesie : main pincee -> cuillere
@@ -489,7 +860,15 @@ def draw_bullet_stop(frame: np.ndarray, event: GameEvent) -> None:
 
     if event.palm_anchor is None:
         if _blink(0.7):
-            _put_centered(frame, "RAISE YOUR HAND", height - 90, 0.95, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
+            _put_centered(
+                frame,
+                "RAISE YOUR HAND",
+                height - 90,
+                0.95,
+                MATRIX_PALE_GREEN,
+                2,
+                cv2.FONT_HERSHEY_SIMPLEX,
+            )
         return
 
     palm_x = int(event.palm_anchor[0] * width)
@@ -524,10 +903,14 @@ def draw_bullet_stop(frame: np.ndarray, event: GameEvent) -> None:
         alpha_ring = (progress - 0.70) / 0.30
         ring_r = int(40 + 20 * alpha_ring)
         cv2.circle(frame, (palm_x, palm_y), ring_r, MATRIX_GREEN, 2, cv2.LINE_AA)
-        cv2.circle(frame, (palm_x, palm_y), ring_r + 8, MATRIX_DARK_GREEN, 1, cv2.LINE_AA)
+        cv2.circle(
+            frame, (palm_x, palm_y), ring_r + 8, MATRIX_DARK_GREEN, 1, cv2.LINE_AA
+        )
 
     # Jauge de progression en bas
-    _draw_progress_bar(frame, (width - 240) // 2, height - 30, 240, 10, progress, MATRIX_GREEN)
+    _draw_progress_bar(
+        frame, (width - 240) // 2, height - 30, 240, 10, progress, MATRIX_GREEN
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -596,7 +979,14 @@ def _celebrate_dodge(frame: np.ndarray, progress: float) -> None:
         start_y = random.randint(int(height * 0.2), int(height * 0.8))
         sweep = random.randint(-40, 40)
         head_x = int(width * (0.1 + 0.8 * random.random()))
-        cv2.line(overlay, (0, start_y), (head_x, start_y + sweep), (235, 235, 235), 2, cv2.LINE_AA)
+        cv2.line(
+            overlay,
+            (0, start_y),
+            (head_x, start_y + sweep),
+            (235, 235, 235),
+            2,
+            cv2.LINE_AA,
+        )
         cv2.circle(overlay, (head_x, start_y + sweep), 4, (255, 255, 255), -1)
     cv2.addWeighted(overlay, 0.5 * fade, frame, 1.0 - 0.5 * fade, 0, frame)
 
@@ -646,7 +1036,9 @@ def _celebrate_rabbit(frame: np.ndarray, progress: float) -> None:
             white,
             -1,
         )
-    cv2.circle(frame, (rabbit_x - body_w, base_y - body_h // 2), max(4, head_r // 2), white, -1)
+    cv2.circle(
+        frame, (rabbit_x - body_w, base_y - body_h // 2), max(4, head_r // 2), white, -1
+    )
 
 
 def _celebrate_spoon(frame: np.ndarray, progress: float) -> None:
@@ -667,7 +1059,9 @@ def _celebrate_spoon(frame: np.ndarray, progress: float) -> None:
     phase = progress * 18.0
     map_x = grid_x + amplitude * np.sin(grid_y / 28.0 + phase)
     map_y = grid_y + amplitude * 0.6 * np.sin(grid_x / 36.0 + phase)
-    frame[:] = cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    frame[:] = cv2.remap(
+        frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT
+    )
 
 
 def _celebrate_bullet_stop(frame: np.ndarray, progress: float) -> None:
@@ -679,7 +1073,9 @@ def _celebrate_bullet_stop(frame: np.ndarray, progress: float) -> None:
     # Onde de choc : cercle qui s'etend et s'estompe
     shock_r = int(progress * width * 0.65)
     if shock_r > 0:
-        cv2.circle(frame, (cx, cy), shock_r, MATRIX_GREEN, max(1, int(4 * fade)), cv2.LINE_AA)
+        cv2.circle(
+            frame, (cx, cy), shock_r, MATRIX_GREEN, max(1, int(4 * fade)), cv2.LINE_AA
+        )
         if shock_r > 30:
             cv2.circle(frame, (cx, cy), shock_r - 20, MATRIX_DARK_GREEN, 1, cv2.LINE_AA)
 
@@ -712,7 +1108,9 @@ def draw_flash(frame: np.ndarray, event: GameEvent) -> None:
     overlay = frame.copy()
     cv2.rectangle(overlay, (0, band_top), (width, band_bottom), (5, 15, 5), -1)
     cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-    _put_centered(frame, event.flash_message, height // 2, 1.6, MATRIX_GREEN, 3, glow=True)
+    _put_centered(
+        frame, event.flash_message, height // 2, 1.6, MATRIX_GREEN, 3, glow=True
+    )
 
 
 def draw_score_screen(frame: np.ndarray, event: GameEvent) -> None:
@@ -727,25 +1125,57 @@ def draw_score_screen(frame: np.ndarray, event: GameEvent) -> None:
         if _blink(0.5):
             _put_centered(frame, "NEW RECORD !", 245, 1.0, (255, 255, 255), 2)
     elif event.best_score > 0:
-        _put_centered(frame, f"BEST : {event.best_score}", 245, 0.8, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
+        _put_centered(
+            frame,
+            f"BEST : {event.best_score}",
+            245,
+            0.8,
+            MATRIX_PALE_GREEN,
+            2,
+            cv2.FONT_HERSHEY_SIMPLEX,
+        )
 
     y = 290
     for result in event.round_results:
         mark = "[OK]" if result.success else "[--]"
         points = f"+{result.points}" if result.success else "  0"
         color = MATRIX_GREEN if result.success else (90, 130, 95)
-        _put_centered(frame, f"{mark} {result.title.upper()}  {points}", y, 0.75, color, 2, cv2.FONT_HERSHEY_SIMPLEX)
+        _put_centered(
+            frame,
+            f"{mark} {result.title.upper()}  {points}",
+            y,
+            0.75,
+            color,
+            2,
+            cv2.FONT_HERSHEY_SIMPLEX,
+        )
         y += 38
 
     if event.chosen_pill:
-        _put_centered(frame, f"PILL OF CHOICE : {event.chosen_pill.upper()}", y + 10, 0.85, PILL_COLORS[event.chosen_pill], 2)
+        _put_centered(
+            frame,
+            f"PILL OF CHOICE : {event.chosen_pill.upper()}",
+            y + 10,
+            0.85,
+            PILL_COLORS[event.chosen_pill],
+            2,
+        )
         y += 48
 
     if _blink(0.8) or event.start_hold_progress > 0:
-        _put_centered(frame, "2 PAUMES OUVERTES POUR REJOUER", height - 70, 0.9, MATRIX_GREEN, 2)
+        _put_centered(
+            frame, "2 PAUMES OUVERTES POUR REJOUER", height - 70, 0.9, MATRIX_GREEN, 2
+        )
     if event.start_hold_progress > 0:
         bar_width = 320
-        _draw_progress_bar(frame, (frame.shape[1] - bar_width) // 2, height - 50, bar_width, 14, event.start_hold_progress)
+        _draw_progress_bar(
+            frame,
+            (frame.shape[1] - bar_width) // 2,
+            height - 50,
+            bar_width,
+            14,
+            event.start_hold_progress,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -753,7 +1183,9 @@ def draw_score_screen(frame: np.ndarray, event: GameEvent) -> None:
 # ---------------------------------------------------------------------------
 
 
-def load_challenge_background(asset_name: str, frame_shape: tuple[int, int, int]) -> np.ndarray | None:
+def load_challenge_background(
+    asset_name: str, frame_shape: tuple[int, int, int]
+) -> np.ndarray | None:
     if not asset_name:
         return None
 
@@ -769,24 +1201,112 @@ def load_challenge_background(asset_name: str, frame_shape: tuple[int, int, int]
     return cv2.resize(background, (width, height), interpolation=cv2.INTER_AREA)
 
 
-def draw_hud(frame: np.ndarray, fps: float, persons: int, faces: int, poses: int, event: GameEvent) -> None:
+def draw_hud(
+    frame: np.ndarray,
+    fps: float,
+    persons: int,
+    faces: int,
+    poses: int,
+    event: GameEvent,
+) -> None:
     h, w = frame.shape[:2]
 
     cv2.rectangle(frame, (0, 0), (w, 74), HUD_BG, -1)
     cv2.rectangle(frame, (0, 74), (w, 76), MATRIX_DARK_GREEN, -1)
 
-    cv2.putText(frame, "MATRIX VISION", (20, 30), cv2.FONT_HERSHEY_DUPLEX, 0.9, MATRIX_GREEN, 2, cv2.LINE_AA)
-    cv2.putText(frame, f"FPS: {fps:4.1f}", (20, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
-    cv2.putText(frame, f"PERSONS: {persons}", (170, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
-    cv2.putText(frame, f"FACES: {faces}", (350, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
-    cv2.putText(frame, f"POSES: {poses}", (500, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
+    cv2.putText(
+        frame,
+        "MATRIX VISION",
+        (20, 30),
+        cv2.FONT_HERSHEY_DUPLEX,
+        0.9,
+        MATRIX_GREEN,
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        f"FPS: {fps:4.1f}",
+        (20, 58),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        MATRIX_GREEN,
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        f"PERSONS: {persons}",
+        (170, 58),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        MATRIX_GREEN,
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        f"FACES: {faces}",
+        (350, 58),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        MATRIX_GREEN,
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        f"POSES: {poses}",
+        (500, 58),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        MATRIX_GREEN,
+        1,
+        cv2.LINE_AA,
+    )
 
     status = f"{event.phase}"
     if event.round_total:
         status += f" | ROUND {event.round_index}/{event.round_total}"
-    cv2.putText(frame, status, (w - 440, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, MATRIX_GREEN, 1, cv2.LINE_AA)
-    cv2.putText(frame, f"SCORE: {event.score}", (w - 440, 58), cv2.FONT_HERSHEY_DUPLEX, 0.7, MATRIX_GREEN, 2, cv2.LINE_AA)
+    cv2.putText(
+        frame,
+        status,
+        (w - 440, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        MATRIX_GREEN,
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        f"SCORE: {event.score}",
+        (w - 440, 58),
+        cv2.FONT_HERSHEY_DUPLEX,
+        0.7,
+        MATRIX_GREEN,
+        2,
+        cv2.LINE_AA,
+    )
     if event.best_score > 0:
-        cv2.putText(frame, f"BEST: {event.best_score}", (w - 165, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, MATRIX_PALE_GREEN, 1, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            f"BEST: {event.best_score}",
+            (w - 165, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            MATRIX_PALE_GREEN,
+            1,
+            cv2.LINE_AA,
+        )
     if event.combo > 1:
-        cv2.putText(frame, f"COMBO x{event.combo}", (w - 165, 58), cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            f"COMBO x{event.combo}",
+            (w - 165, 58),
+            cv2.FONT_HERSHEY_DUPLEX,
+            0.65,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )

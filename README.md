@@ -16,6 +16,7 @@ State machine :
 ATTRACT --2 paumes 1s--> INTRO (clip video, si present) --> PILL_CHOICE
 PILL_CHOICE --pilule bleue--> BLUE_ENDING (camera normale, sans effet) --2 paumes--> nouvelle partie
 PILL_CHOICE --pilule rouge--> COUNTDOWN (3, 2, 1) --> IN_ROUND (4 epreuves, ordre aleatoire) --> SCORE
+SCORE -->= 3s apres la celebration finale--> TRINITY_OUTRO (clip 1:41->1:44 gele + texte + QR) --ESPACE / ~10s--> ATTRACT
 ```
 
 Demarrage : montrer **2 paumes ouvertes pendant 1 s** face a la camera (zero calibration). Le jeu s'ouvre sur le **choix des pilules** : la bleue ramene a la realite (camera brute, aucun effet Matrix, invite a rejouer), la rouge lance les 4 epreuves. La pilule choisie est publiee en MQTT **au moment du choix**. Une epreuve ratee (temps ecoule) passe simplement a la suivante avec 0 point : le parcours rouge se termine toujours sur l'ecran de score.
@@ -26,6 +27,18 @@ Les fichiers `.mp4` ne sont pas versionnés (`assets/*.mp4` est dans `.gitignore
 
 - `assets/intro.mp4` — clip d'intro avant le choix des pilules. Segment configurable : `--intro-start 164 --intro-end 178` (defaut 2:44→2:58). Touche **ESPACE** pour passer. Fichier absent : intro sautee.
 - `assets/stop_bullet.mp4` — clip "Neo stoppe les balles" joue sur la reussite de la figure *Stop The Bullets* (segment 2:10→2:20, avec audio via `ffplay`). Fichier absent : la figure reste jouable, la celebration visuelle en pur OpenCV prend le relais.
+- `assets/trinity.mp4` — clip outro de fin de partie (voir ci-dessous). Fichier absent : l'outro est sautee, le jeu revient directement a l'attract depuis l'ecran de score.
+
+### Outro Trinity (apres l'ecran de score)
+
+A la fin d'une partie pilule rouge, l'**ecran de score reste visible au moins 3 s** (ce delai ne demarre qu'**apres la fin de la celebration** de la derniere figure, pour qu'il soit toujours lisible meme apres une figure a longue celebration comme *Stop The Bullets*). Puis demarre la phase **`TRINITY_OUTRO`** :
+
+- le clip `assets/trinity.mp4` joue de **1:41 → 1:44** (segment `TRINITY_VIDEO_START/END` dans `src/config.py`), puis **gele sur la derniere frame** ;
+- l'audio est double : le **son natif du clip** (~3 s, effet bullet-time) **+** le **theme de fond** `assets/trinity_theme.m4a` (joue en entier via `ffplay`, coupe au retour en attract) ;
+- sur la frame gelee s'affichent, via **Pillow** (texte accentue propre, hors HERSHEY) : le **message d'invitation** (centre, bas) et le **QR code de contact** `assets/QRCode pour Formulaire de contact rapide.png` (incruste a droite, sur un panneau clair + liseré vert pour rester scannable) ;
+- retour a l'attract sur **ESPACE** ou automatiquement apres ~10 s de gel (`TRINITY_FREEZE_HOLD_SEC`).
+
+Contrairement aux `.mp4`, les assets `trinity_theme.m4a` et le PNG du QR **sont versionnes**. Chacun est optionnel a l'execution : le code retombe proprement si un fichier manque.
 
 Scoring : `points = (50 + bonus vitesse jusqu'a 50) x combo`. Le **combo** (x1 a x5) compte les figures reussies d'affilee, un echec le casse. Partie moyenne ~150-400 pts, partie parfaite et rapide ~1400 pts. Le **meilleur score du jour** est persiste dans `highscore.json` et affiche sur l'ecran d'accueil (`BEST TODAY`) ; le battre declenche `NEW RECORD !`.
 
