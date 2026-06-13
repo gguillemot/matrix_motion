@@ -5,7 +5,7 @@ Real-time demo with a camera in Matrix style:
 - Object/person detection (YOLOv8)
 - Face detection (MediaPipe)
 - Hand gesture recognition (MediaPipe Hands)
-- Fullscreen neon green HUD + Matrix rain effect
+- Fullscreen neon green HUD + Matrix rain effect (code rain rendered **behind** the segmented player)
 - Optional MQTT trigger to your NodeMCU servo project
 
 ## Mode jeu BreizhCamp 2026
@@ -42,11 +42,29 @@ La detection de main ouverte est independante du miroir camera et accepte paume 
 
 Reglages : `--round-duration 8.0` (temps par figure), `--countdown-duration 3.0`. Sur le stand, lancer avec `--disable-yolo` pour maximiser les FPS.
 
+## Fond "code rain" par segmentation
+
+La pluie de caracteres Matrix tombe **derriere** la personne (effet signature : on est "dans" la Matrice). La personne est segmentee a chaque frame avec MediaPipe `ImageSegmenter` (modele `selfie_segmenter.tflite`, telecharge automatiquement au 1er lancement) ; le masque est seuille, ses bords adoucis au flou gaussien, puis **lisse temporellement** (blend avec la frame precedente) pour eviter le scintillement. La personne reste au premier plan avec un leger virage vert neon.
+
+Tout est reglable dans `src/config.py` (section *Segmentation "code rain"*) :
+
+| Constante | Role |
+|---|---|
+| `SEGMENTATION_ENABLED` | Active le fond par segmentation. `False` (ou modele/lib absents) -> ancienne pluie dessinee par-dessus la camera |
+| `MASK_SMOOTHING` | Lissage temporel du masque (bas = plus stable, moins reactif) |
+| `MASK_THRESHOLD` | Seuil de decision personne/fond avant adoucissement |
+| `MASK_BLUR_KSIZE` | Rayon du flou des bords du masque (impair) |
+| `MASK_INVERT` | A passer a `True` si fond et personne sont inverses a l'ecran |
+| `FOREGROUND_GREEN_TINT` | Intensite du virage vert applique a la personne (0 = couleur brute) |
+| `RAIN_BACKGROUND_COLOR` | Couleur du fond derriere les caracteres (BGR) |
+
+Degradation propre : si le modele ou MediaPipe echoue, le jeu retombe automatiquement sur l'ancienne pluie en overlay (log `[SEG] disabled ... fallback`).
+
 ## Structure
 
 - `src/main.py`: entry point that wires the app together
 - `src/config.py`: CLI and environment config
-- `src/tracking.py`: MediaPipe and YOLO setup
+- `src/tracking.py`: MediaPipe and YOLO setup, plus `PersonMaskTracker` for code-rain segmentation
 - `src/game_engine.py`: campaign state machine and round progression
 - `src/challenges.py`: gesture recognition and campaign definitions
 - `src/rendering.py`: HUD, overlays, challenge cards, and visual effects

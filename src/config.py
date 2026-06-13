@@ -10,6 +10,38 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# ---------------------------------------------------------------------------
+# Segmentation "code rain" (feature signature)
+# ---------------------------------------------------------------------------
+# La personne est segmentee (MediaPipe ImageSegmenter / Selfie Segmentation)
+# et la pluie de caracteres tombe DERRIERE elle. Toutes les constantes de
+# reglage du rendu sont ici pour pouvoir ajuster vite sur le stand.
+
+# Active le fond code rain par segmentation. Si False (ou si le modele/lib
+# manque), on retombe sur l'ancienne pluie dessinee par-dessus la camera.
+SEGMENTATION_ENABLED = True
+
+# Lissage temporel du masque : nouveau_masque = a*courant + (1-a)*precedent.
+# Plus c'est bas, plus c'est stable (mais moins reactif). 0.5 = bon compromis.
+MASK_SMOOTHING = 0.5
+
+# Seuil de decision personne/fond avant adoucissement des bords (0..1).
+MASK_THRESHOLD = 0.35
+
+# Rayon du flou gaussien applique au masque pour des bords doux (impair).
+MASK_BLUR_KSIZE = 21
+
+# Si le modele renvoie le masque inverse (fond=1, personne=0), passer a True.
+MASK_INVERT = False
+
+# Teinte verte appliquee a la personne au premier plan (0 = couleur brute,
+# 1 = tres vert Matrix). Donne l'impression d'etre "dans" la Matrix.
+FOREGROUND_GREEN_TINT = 0.22
+
+# Fond de la pluie : noir tres legerement teinte vert (BGR), plus cinematique
+# qu'un noir pur derriere les caracteres.
+RAIN_BACKGROUND_COLOR = (8, 14, 8)
+
 
 @dataclass(slots=True)
 class AppConfig:
