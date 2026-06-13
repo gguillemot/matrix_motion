@@ -20,13 +20,16 @@ PILL_CHOICE --pilule rouge--> COUNTDOWN (3, 2, 1) --> IN_ROUND (4 epreuves, ordr
 
 Demarrage : montrer **2 paumes ouvertes pendant 1 s** face a la camera (zero calibration). Le jeu s'ouvre sur le **choix des pilules** : la bleue ramene a la realite (camera brute, aucun effet Matrix, invite a rejouer), la rouge lance les 4 epreuves. La pilule choisie est publiee en MQTT **au moment du choix**. Une epreuve ratee (temps ecoule) passe simplement a la suivante avec 0 point : le parcours rouge se termine toujours sur l'ecran de score.
 
-### Clip d'intro
+### Clips video
 
-Deposer un fichier video local `assets/intro.mp4` (non versionne, `assets/*.mp4` est dans `.gitignore`). Le segment joue est configurable : `--intro-start 164 --intro-end 178` (defaut 2:44 -> 2:58). Lecture **sans audio** (limite OpenCV), touche **ESPACE** pour passer. Fichier absent : l'intro est sautee, le jeu va directement au choix des pilules.
+Les fichiers `.mp4` ne sont pas versionnés (`assets/*.mp4` est dans `.gitignore`) :
+
+- `assets/intro.mp4` — clip d'intro avant le choix des pilules. Segment configurable : `--intro-start 164 --intro-end 178` (defaut 2:44→2:58). Touche **ESPACE** pour passer. Fichier absent : intro sautee.
+- `assets/stop_bullet.mp4` — clip "Neo stoppe les balles" joue sur la reussite de la figure *Stop The Bullets* (segment 2:10→2:20, avec audio via `ffplay`). Fichier absent : la figure reste jouable, la celebration visuelle en pur OpenCV prend le relais.
 
 Scoring : `points = (50 + bonus vitesse jusqu'a 50) x combo`. Le **combo** (x1 a x5) compte les figures reussies d'affilee, un echec le casse. Partie moyenne ~150-400 pts, partie parfaite et rapide ~1400 pts. Le **meilleur score du jour** est persiste dans `highscore.json` et affiche sur l'ecran d'accueil (`BEST TODAY`) ; le battre declenche `NEW RECORD !`.
 
-Chaque figure reussie declenche un **effet de recompense** (~2.4 s) : bullet-time avec rejeu au ralenti et vignette noire (dodge), teinte rouge/bleue plein ecran (pilule), pluie blanche + lapin bondissant (white rabbit), distorsion de la realite (cuillere), glitch numerique (Smith).
+Chaque figure reussie declenche un **effet de recompense** (~3.5 s, 10 s pour "Stop The Bullets") : bullet-time avec rejeu au ralenti et vignette noire (dodge), teinte rouge/bleue plein ecran (pilule), pluie blanche + lapin bondissant (white rabbit), distorsion de la realite (cuillere), clip video Neo stoppe les balles + onde de choc verte (bullet_stop).
 
 Les 5 figures (seuils geometriques documentes dans `src/challenges.py`) :
 
@@ -36,7 +39,7 @@ Les 5 figures (seuils geometriques documentes dans `src/challenges.py`) :
 | The Neo Dodge | Pencher fortement buste + tete sur le cote, tenir 0.5 s | Offset nez / centre des epaules >= 30 % de l'envergure d'epaules |
 | Follow the White Rabbit | Oreilles de lapin (index + majeur) au-dessus de la tete | 2 mains `bunny_ears` au-dessus du nez, 0.9 s |
 | There Is No Spoon | Tordre par "telekinesie" la cuillere geante au centre de l'ecran : pincer pouce-index et tourner la main | Pince pouce-index + rotation cumulee >= 45° |
-| Agent Smith | Ne plus bouger du tout : les lunettes d'agent apparaissent en fondu avec l'immobilite, opacite totale = gagne | Nez immobile (< 8 % de l'envergure d'epaules) pendant 2 s |
+| Stop The Bullets | Lever la paume ouverte au-dessus du milieu de l'image et tenir ~2.5 s — les balles convergent et se figent | Paume ouverte avec `palm_y < 0.60`, maintien 2.5 s (grace 1.5 s en debut de round) |
 
 La detection de main ouverte est independante du miroir camera et accepte paume comme revers (test geometrique du pouce par rapport a la direction de la main, voir `finger_states` dans `src/challenges.py`).
 

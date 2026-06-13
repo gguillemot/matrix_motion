@@ -459,63 +459,51 @@ def draw_spoon(frame: np.ndarray, event: GameEvent) -> None:
     )
 
 
-def draw_agent_glasses(frame: np.ndarray, detections, progress: float) -> int:
-    faces = 0
-    if not detections:
-        return faces
+def draw_bullet_stop(frame: np.ndarray, event: GameEvent) -> None:
+    height, width = frame.shape[:2]
+    progress = event.figure_progress
 
-    for det in detections:
-        faces += 1
-        bb = det.bounding_box
-        x, y, bw, bh = bb.origin_x, bb.origin_y, bb.width, bb.height
+    if event.palm_anchor is None:
+        if _blink(0.7):
+            _put_centered(frame, "RAISE YOUR HAND", height - 90, 0.95, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX)
+        return
 
-        # Cadre + consigne toujours visibles pour signaler la figure active
-        cv2.rectangle(frame, (x, y), (x + bw, y + bh), MATRIX_DARK_GREEN, 1)
-        if progress <= 0.0:
-            if _blink(0.5):
-                cv2.putText(frame, "DON'T MOVE", (x, max(20, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (60, 60, 255), 2, cv2.LINE_AA)
-            continue
+    palm_x = int(event.palm_anchor[0] * width)
+    palm_y = int(event.palm_anchor[1] * height)
 
-        cv2.putText(
-            frame,
-            f"SCANNING {int(progress * 100)}%",
-            (x, max(20, y - 10)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            MATRIX_GREEN,
-            2,
-            cv2.LINE_AA,
-        )
+    # Trajectoires deterministes : N balles depuis les bords vers la paume.
+    # t = progression d'avance vers la paume (0 = bord, 1 = sur la paume).
+    N = 14
+    radius_out = int(math.hypot(width, height) * 0.65)
+    t = min(1.0, progress * 1.15)
 
-        # Les lunettes sont la recompense de l'immobilite : elles apparaissent
-        # en fondu (opacite = progression du scan) et disparaissent des que le
-        # joueur bouge. Opacite totale = victoire.
-        # Style "agent" : verres etroits et larges, ecartement reduit,
-        # monture argentee fine, pont court, branches vers les tempes, reflet.
-        overlay = frame.copy()
-        silver = (185, 185, 195)
-        eye_y = y + int(0.42 * bh)
-        lens_axes = (max(8, int(0.20 * bw)), max(5, int(0.09 * bh)))
-        left_eye = (x + int(0.30 * bw), eye_y)
-        right_eye = (x + int(0.70 * bw), eye_y)
-        for center in (left_eye, right_eye):
-            cv2.ellipse(overlay, center, lens_axes, 0, 0, 360, (10, 10, 12), -1)
-            cv2.ellipse(overlay, center, lens_axes, 0, 0, 360, silver, 2)
-            # Reflet en haut a gauche du verre
-            gleam_center = (center[0] - lens_axes[0] // 3, center[1] - lens_axes[1] // 2)
-            cv2.ellipse(overlay, gleam_center, (lens_axes[0] // 4, max(2, lens_axes[1] // 4)), -20, 0, 360, (235, 235, 240), -1)
-        cv2.line(overlay, (left_eye[0] + lens_axes[0], eye_y - 2), (right_eye[0] - lens_axes[0], eye_y - 2), silver, 2)
-        cv2.line(overlay, (x, eye_y + 2), (left_eye[0] - lens_axes[0], eye_y), silver, 2)
-        cv2.line(overlay, (right_eye[0] + lens_axes[0], eye_y), (x + bw, eye_y + 2), silver, 2)
+    overlay = frame.copy()
+    for i in range(N):
+        theta = 2 * math.pi * i / N
+        src_x = int(width / 2 + radius_out * math.cos(theta))
+        src_y = int(height / 2 + radius_out * math.sin(theta))
 
-        # Ligne de scan animee par la progression d'immobilite
-        scan_y = y + int(progress * bh)
-        cv2.line(overlay, (x, scan_y), (x + bw, scan_y), MATRIX_GREEN, 2)
+        bx = int(src_x + (palm_x - src_x) * t)
+        by = int(src_y + (palm_y - src_y) * t)
 
-        alpha = min(1.0, progress)
-        cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
+        # Trainee : longueur diminue quand t augmente (effet de freinage)
+        trail_len = max(1.0 - t, 0.05)
+        tail_x = int(src_x + (palm_x - src_x) * max(0.0, t - trail_len * 0.35))
+        tail_y = int(src_y + (palm_y - src_y) * max(0.0, t - trail_len * 0.35))
+        cv2.line(overlay, (tail_x, tail_y), (bx, by), (180, 180, 180), 1, cv2.LINE_AA)
+        cv2.circle(overlay, (bx, by), 4, (235, 235, 235), -1, cv2.LINE_AA)
 
-    return faces
+    cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
+
+    # Anneau de "champ de force" autour de la paume quand les balles se figent
+    if progress > 0.70:
+        alpha_ring = (progress - 0.70) / 0.30
+        ring_r = int(40 + 20 * alpha_ring)
+        cv2.circle(frame, (palm_x, palm_y), ring_r, MATRIX_GREEN, 2, cv2.LINE_AA)
+        cv2.circle(frame, (palm_x, palm_y), ring_r + 8, MATRIX_DARK_GREEN, 1, cv2.LINE_AA)
+
+    # Jauge de progression en bas
+    _draw_progress_bar(frame, (width - 240) // 2, height - 30, 240, 10, progress, MATRIX_GREEN)
 
 
 # ---------------------------------------------------------------------------
@@ -564,8 +552,8 @@ def draw_celebration(frame: np.ndarray, event: GameEvent) -> None:
         _celebrate_rabbit(frame, progress)
     elif key == "no_spoon":
         _celebrate_spoon(frame, progress)
-    elif key == "smith_scan":
-        _celebrate_smith(frame, progress)
+    elif key == "bullet_stop":
+        _celebrate_bullet_stop(frame, progress)
 
 
 def _celebrate_dodge(frame: np.ndarray, progress: float) -> None:
@@ -658,21 +646,37 @@ def _celebrate_spoon(frame: np.ndarray, progress: float) -> None:
     frame[:] = cv2.remap(frame, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
 
-def _celebrate_smith(frame: np.ndarray, progress: float) -> None:
-    # Glitch numerique : tranches decalees + teinte verte.
+def _celebrate_bullet_stop(frame: np.ndarray, progress: float) -> None:
+    # Onde de choc verte depuis le centre + balles figees qui retombent.
     height, width = frame.shape[:2]
-    fade = 1.0 - progress
+    cx, cy = width // 2, height // 2
+    fade = max(0.0, 1.0 - progress)
 
-    for _ in range(8):
-        slice_y = random.randint(0, height - 22)
-        slice_h = random.randint(4, 20)
-        shift = int(random.randint(-45, 45) * fade)
-        if shift:
-            frame[slice_y : slice_y + slice_h] = np.roll(frame[slice_y : slice_y + slice_h], shift, axis=1)
+    # Onde de choc : cercle qui s'etend et s'estompe
+    shock_r = int(progress * width * 0.65)
+    if shock_r > 0:
+        cv2.circle(frame, (cx, cy), shock_r, MATRIX_GREEN, max(1, int(4 * fade)), cv2.LINE_AA)
+        if shock_r > 30:
+            cv2.circle(frame, (cx, cy), shock_r - 20, MATRIX_DARK_GREEN, 1, cv2.LINE_AA)
 
-    tint = np.zeros_like(frame)
-    tint[:, :, 1] = 255
-    cv2.addWeighted(tint, 0.18 * fade, frame, 1.0 - 0.18 * fade, 0, frame)
+    # Balles figees qui retombent (gravite simulee par progress^2)
+    N = 14
+    drop_y = int(progress * progress * height * 0.6)
+    for i in range(N):
+        theta = 2 * math.pi * i / N
+        bx = int(cx + 60 * math.cos(theta))
+        by = int(cy - int(height * 0.25) + drop_y)
+        if 0 <= by < height and 0 <= bx < width:
+            ball_alpha = max(0.0, fade)
+            if ball_alpha > 0.05:
+                overlay = frame.copy()
+                cv2.circle(overlay, (bx, by), 5, (235, 235, 235), -1, cv2.LINE_AA)
+                cv2.addWeighted(overlay, ball_alpha, frame, 1.0 - ball_alpha, 0, frame)
+
+    # Texte "YOU ARE THE ONE" qui s'estompe
+    if fade > 0.1:
+        color = tuple(int(c * fade) for c in MATRIX_PALE_GREEN)
+        _put_centered(frame, "YOU ARE THE ONE", int(height * 0.40), 1.4, color, 2)  # type: ignore[arg-type]
 
 
 def draw_flash(frame: np.ndarray, event: GameEvent) -> None:

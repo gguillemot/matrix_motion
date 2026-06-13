@@ -4,15 +4,16 @@ import unittest
 from types import SimpleNamespace
 
 from src.challenges import (
+    BULLET_STOP_PALM_MAX_Y,
     DODGE_OFFSET_THRESHOLD,
     PILL_ZONES,
     HandObservation,
     HoldTracker,
     PoseObservation,
-    ScanTracker,
     SpoonTracker,
     build_breizhcamp_campaign,
     build_campaign,
+    bullet_stop_palm,
     bunny_ears_active,
     challenge_matches,
     classify_hand_gestures,
@@ -194,7 +195,7 @@ class BreizhcampCampaignTests(unittest.TestCase):
         campaign = build_breizhcamp_campaign(shuffle=False)
         self.assertEqual(
             [challenge.key for challenge in campaign],
-            ["neo_dodge", "white_rabbit", "no_spoon", "smith_scan"],
+            ["neo_dodge", "white_rabbit", "no_spoon", "bullet_stop"],
         )
 
     def test_shuffled_campaign_keeps_same_figures(self) -> None:
@@ -203,7 +204,7 @@ class BreizhcampCampaignTests(unittest.TestCase):
         campaign = build_breizhcamp_campaign(random.Random(7))
         self.assertEqual(
             sorted(challenge.key for challenge in campaign),
-            ["neo_dodge", "no_spoon", "smith_scan", "white_rabbit"],
+            ["bullet_stop", "neo_dodge", "no_spoon", "white_rabbit"],
         )
 
 
@@ -323,29 +324,31 @@ class SpoonTrackerTests(unittest.TestCase):
         self.assertIsNone(tracker.anchor)
 
 
-class ScanTrackerTests(unittest.TestCase):
-    def still_pose(self) -> PoseObservation:
-        return PoseObservation(nose_x=0.5, shoulder_center_x=0.5, shoulder_span=0.3, nose_y=0.4)
+class BulletStopTests(unittest.TestCase):
+    def raised_palm(self, palm_y: float = 0.30) -> HandObservation:
+        return HandObservation(gesture="open_palm", palm_x=0.5, palm_y=palm_y, is_pinch=False, hand_angle=0.0)
 
-    def test_still_pose_completes_scan(self) -> None:
-        tracker = ScanTracker()
-        self.assertEqual(tracker.update(self.still_pose(), 0.0), 0.0)
-        self.assertAlmostEqual(tracker.update(self.still_pose(), 1.0), 0.5)
-        self.assertEqual(tracker.update(self.still_pose(), 2.1), 1.0)
+    def test_raised_open_palm_returns_anchor(self) -> None:
+        hand = self.raised_palm(palm_y=0.30)
+        result = bullet_stop_palm([hand])
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result[0], 0.5)  # type: ignore[index]
+        self.assertAlmostEqual(result[1], 0.30)  # type: ignore[index]
 
-    def test_movement_resets_scan(self) -> None:
-        tracker = ScanTracker()
-        tracker.update(self.still_pose(), 0.0)
-        tracker.update(self.still_pose(), 1.5)
-        moved = PoseObservation(nose_x=0.58, shoulder_center_x=0.5, shoulder_span=0.3, nose_y=0.4)
-        self.assertEqual(tracker.update(moved, 1.6), 0.0)
-        self.assertAlmostEqual(tracker.update(moved, 2.6), 0.5)
+    def test_low_palm_returns_none(self) -> None:
+        hand = self.raised_palm(palm_y=BULLET_STOP_PALM_MAX_Y + 0.05)
+        self.assertIsNone(bullet_stop_palm([hand]))
 
-    def test_lost_pose_resets_scan(self) -> None:
-        tracker = ScanTracker()
-        tracker.update(self.still_pose(), 0.0)
-        self.assertEqual(tracker.update(None, 1.0), 0.0)
-        self.assertEqual(tracker.update(self.still_pose(), 1.1), 0.0)
+    def test_at_threshold_returns_none(self) -> None:
+        hand = self.raised_palm(palm_y=BULLET_STOP_PALM_MAX_Y)
+        self.assertIsNone(bullet_stop_palm([hand]))
+
+    def test_other_gesture_returns_none(self) -> None:
+        hand = HandObservation(gesture="fist", palm_x=0.5, palm_y=0.20, is_pinch=False, hand_angle=0.0)
+        self.assertIsNone(bullet_stop_palm([hand]))
+
+    def test_empty_hands_returns_none(self) -> None:
+        self.assertIsNone(bullet_stop_palm([]))
 
 
 class LegacyCampaignTests(unittest.TestCase):
