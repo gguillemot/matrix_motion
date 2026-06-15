@@ -29,6 +29,9 @@ TRINITY_OUTRO_TEXT = (
 
 # Polices TrueType candidates (macOS) pour le texte accentue ; fallback bitmap.
 _PIL_FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
     "/System/Library/Fonts/HelveticaNeue.ttc",
     "/System/Library/Fonts/Helvetica.ttc",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -74,7 +77,11 @@ class MatrixRain:
         self.trail_length = trail_length
         self.columns = max(1, width // spacing)
         self.drops = [random.randint(-height, 0) for _ in range(self.columns)]
-        self.charset = string.digits
+        # Chiffres + lettres ASCII pour la base.
+        self.charset = (
+            string.digits + string.ascii_uppercase + "#$%&*+-=<>?@"
+        )
+        self.ascii_font_scale = max(0.42, min(0.56, self.spacing / 22.0))
 
     def _render(
         self, canvas: np.ndarray, boost: bool = False, white: bool = False
@@ -108,7 +115,7 @@ class MatrixRain:
                     char,
                     (x, trail_y),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.48,
+                    self.ascii_font_scale,
                     color,
                     1,
                     cv2.LINE_AA,
