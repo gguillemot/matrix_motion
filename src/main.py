@@ -66,6 +66,7 @@ from src.rendering import (
     fit_to_window,
 )
 from src.tracking import (
+    MediaPipeInferenceCache,
     PersonMaskTracker,
     YoloWorker,
     create_face_detector,
@@ -120,12 +121,20 @@ def run(cfg: AppConfig) -> None:
     rain = None
     intro_path = Path(cfg.intro_video)
     has_intro = intro_path.exists()
+    if cfg.benchmark_seconds > 0:
+        has_intro = False
+        print(
+            f"[BENCH] benchmark mode enabled for {cfg.benchmark_seconds:.1f}s (intro disabled)"
+        )
     if has_intro:
         print(
             f"[INTRO] clip found: {intro_path} ({cfg.intro_start:.0f}s -> {cfg.intro_end:.0f}s, SPACE to skip)"
         )
     else:
-        print("[INTRO] no clip at assets/intro.mp4, intro skipped")
+        if cfg.benchmark_seconds > 0:
+            print("[INTRO] skipped during benchmark")
+        else:
+            print("[INTRO] no clip at assets/intro.mp4, intro skipped")
 
     engine = GameEngine(
         round_duration=cfg.round_duration,
@@ -135,20 +144,112 @@ def run(cfg: AppConfig) -> None:
         has_intro=has_intro,
     )
 
+    # Resolve runtime performance knobs from presets or keep manual values.
+    resolved_mp_scale = cfg.mp_scale
+    resolved_mp_hand_stride = cfg.mp_hand_stride
+    resolved_mp_face_stride = cfg.mp_face_stride
+    resolved_mp_pose_stride = cfg.mp_pose_stride
+    resolved_mp_seg_stride = cfg.mp_seg_stride
+    resolved_yolo_stride = cfg.yolo_stride
+    resolved_yolo_device = cfg.yolo_device
+    resolved_yolo_half = cfg.yolo_half
+
+    detected_gpu = False
+    try:
+        import torch
+
+        detected_gpu = torch.cuda.is_available()
+    except Exception:
+        detected_gpu = False
+
+    if cfg.perf_mode != "manual":
+        use_gpu = detected_gpu
+        if cfg.perf_target == "cpu":
+            use_gpu = False
+        elif cfg.perf_target == "gpu" and not detected_gpu:
+            print("[OPTIM] perf-target=gpu requested but no CUDA/ROCm backend detected; fallback to CPU preset")
+            use_gpu = False
+
+        if use_gpu:
+            presets = {
+                "quality": (0.95, 1, 1, 1, 1, 2, "cuda:0", False),
+                "balanced": (0.85, 1, 1, 1, 2, 3, "cuda:0", True),
+                "fast": (0.75, 1, 1, 2, 2, 4, "cuda:0", True),
+            }
+            hw = "gpu"
+        else:
+            presets = {
+                "quality": (0.80, 2, 2, 2, 3, 3, "cpu", False),
+                "balanced": (0.70, 2, 2, 3, 3, 4, "cpu", False),
+                "fast": (0.60, 3, 3, 3, 4, 5, "cpu", False),
+            }
+            hw = "cpu"
+
+        (
+            resolved_mp_scale,
+            resolved_mp_hand_stride,
+            resolved_mp_face_stride,
+            resolved_mp_pose_stride,
+            resolved_mp_seg_stride,
+            resolved_yolo_stride,
+            resolved_yolo_device,
+            resolved_yolo_half,
+        ) = presets[cfg.perf_mode]
+        print(
+            "[OPTIM] preset="
+            f"{cfg.perf_mode}/{hw} "
+            f"mp_scale={resolved_mp_scale:.2f} "
+            f"strides(h/f/p/s)={resolved_mp_hand_stride}/{resolved_mp_face_stride}/{resolved_mp_pose_stride}/{resolved_mp_seg_stride} "
+            f"yolo_stride={resolved_yolo_stride} yolo_device={resolved_yolo_device} yolo_half={resolved_yolo_half}"
+        )
+
     try:
         if not cfg.disable_yolo:
             try:
                 model = YOLO(cfg.model)
+                yolo_device = resolved_yolo_device
+                if yolo_device == "auto":
+                    yolo_device = "cpu"
+                    try:
+                        import torch
+
+                        if torch.cuda.is_available():
+                            yolo_device = "cuda:0"
+                    except Exception:
+                        yolo_device = "cpu"
+
+                try:
+                    model.to(yolo_device)
+                except Exception as exc:
+                    print(f"[YOLO] requested device '{yolo_device}' failed ({exc}), fallback to cpu")
+                    yolo_device = "cpu"
+                    model.to(yolo_device)
+
+                if resolved_yolo_half and yolo_device.startswith("cuda"):
+                    try:
+                        raw_model = getattr(model, "model", None)
+                        half_fn = getattr(raw_model, "half", None)
+                        if callable(half_fn):
+                            half_fn()
+                            print("[YOLO] FP16 enabled")
+                        else:
+                            print("[YOLO] FP16 disabled (model backend has no half())")
+                    except Exception as exc:
+                        print(f"[YOLO] FP16 disabled (not supported): {exc}")
+
                 yolo_worker = YoloWorker(model, cfg.imgsz, cfg.conf)
                 print(
-                    f"[YOLO] loaded {cfg.model} (background thread, imgsz={cfg.imgsz})"
+                    f"[YOLO] loaded {cfg.model} on {yolo_device} (background thread, imgsz={cfg.imgsz})"
                 )
             except Exception as exc:
                 print(f"[YOLO] disabled (load failed): {exc}")
 
         hand_landmarker = create_hand_landmarker()
+        print("[HAND] landmarker loaded (GPU delegate if available)")
         face_detector = create_face_detector()
+        print("[FACE] detector loaded (GPU delegate if available)")
         pose_landmarker = create_pose_landmarker()
+        print("[POSE] landmarker loaded (GPU delegate if available)")
 
         # Segmentation pour le fond "code rain" derriere la personne. Si le
         # modele ou la lib echoue, on retombe proprement sur l'ancienne pluie
@@ -163,7 +264,7 @@ def run(cfg: AppConfig) -> None:
                     blur_ksize=MASK_BLUR_KSIZE,
                     invert=MASK_INVERT,
                 )
-                print("[SEG] selfie segmenter loaded (code rain behind person)")
+                print("[SEG] selfie segmenter loaded (GPU delegate if available, code rain behind person)")
             except Exception as exc:
                 print(f"[SEG] disabled (load failed): {exc} -- fallback rain overlay")
                 segmenter = None
@@ -181,6 +282,71 @@ def run(cfg: AppConfig) -> None:
         frame_idx = 0
         last_tick = time.perf_counter()
         fps = 0.0
+
+        bench_enabled = cfg.benchmark_seconds > 0
+        bench_target_runs = cfg.benchmark_runs
+        bench_current_run = 1
+        bench_started_at = 0.0
+        bench_frames = 0
+        bench_sum_fps = 0.0
+        bench_min_fps = float("inf")
+        bench_max_fps = 0.0
+        bench_hand_runs = 0
+        bench_face_runs = 0
+        bench_pose_runs = 0
+        bench_seg_runs = 0
+        bench_reported = False
+        bench_run_avgs: list[float] = []
+
+        def emit_bench_summary(reason: str) -> None:
+            nonlocal bench_reported
+            if not bench_enabled or bench_reported:
+                return
+            bench_reported = True
+            elapsed = max(0.001, time.perf_counter() - bench_started_at) if bench_started_at > 0 else 0.0
+            avg_fps = bench_sum_fps / max(1, bench_frames)
+            min_fps = bench_min_fps if bench_frames > 0 else 0.0
+            max_fps = bench_max_fps if bench_frames > 0 else 0.0
+            bench_run_avgs.append(avg_fps)
+            hand_rate = bench_hand_runs / max(1, bench_frames)
+            face_rate = bench_face_runs / max(1, bench_frames)
+            pose_rate = bench_pose_runs / max(1, bench_frames)
+            seg_rate = bench_seg_runs / max(1, bench_frames)
+            print(f"[BENCH] run {bench_current_run}/{bench_target_runs} done ({reason})")
+            print(
+                "[BENCH] "
+                f"elapsed={elapsed:.1f}s frames={bench_frames} "
+                f"fps_avg={avg_fps:.1f} fps_min={min_fps:.1f} fps_max={max_fps:.1f}"
+            )
+            print(
+                "[BENCH] infer/frame "
+                f"hand={hand_rate:.2f} face={face_rate:.2f} pose={pose_rate:.2f} seg={seg_rate:.2f}"
+            )
+
+        def reset_bench_run(now_tick: float) -> None:
+            nonlocal bench_started_at, bench_frames, bench_sum_fps, bench_min_fps, bench_max_fps
+            nonlocal bench_hand_runs, bench_face_runs, bench_pose_runs, bench_seg_runs, bench_reported
+            bench_started_at = now_tick
+            bench_frames = 0
+            bench_sum_fps = 0.0
+            bench_min_fps = float("inf")
+            bench_max_fps = 0.0
+            bench_hand_runs = 0
+            bench_face_runs = 0
+            bench_pose_runs = 0
+            bench_seg_runs = 0
+            bench_reported = False
+
+        hand_cache = MediaPipeInferenceCache(resolved_mp_hand_stride)
+        face_cache = MediaPipeInferenceCache(resolved_mp_face_stride)
+        pose_cache = MediaPipeInferenceCache(resolved_mp_pose_stride)
+        seg_cache = MediaPipeInferenceCache(resolved_mp_seg_stride)
+        print(
+            "[OPTIM] MediaPipe: "
+            f"scale={resolved_mp_scale:.2f} "
+            f"strides(hand/face/pose/seg)="
+            f"{resolved_mp_hand_stride}/{resolved_mp_face_stride}/{resolved_mp_pose_stride}/{resolved_mp_seg_stride}"
+        )
 
         # Bullet-time : on garde les dernieres frames propres pour les
         # rejouer au ralenti quand le Neo Dodge est reussi.
@@ -345,21 +511,62 @@ def run(cfg: AppConfig) -> None:
         while True:
             ok, frame = cap.read()
             if not ok:
+                emit_bench_summary("camera")
                 break
 
             frame = cv2.flip(frame, 1)
             frame_idx += 1
-            frame_buffer.append(frame.copy())
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             timestamp_ms = int((time.perf_counter() - video_start_ts) * 1000)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            hand_results = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
-            face_results = face_detector.detect_for_video(mp_image, timestamp_ms)
-            pose_results = pose_landmarker.detect_for_video(mp_image, timestamp_ms)
+            if resolved_mp_scale < 1.0:
+                rgb_infer = cv2.resize(
+                    rgb,
+                    None,
+                    fx=resolved_mp_scale,
+                    fy=resolved_mp_scale,
+                    interpolation=cv2.INTER_LINEAR,
+                )
+            else:
+                rgb_infer = rgb
+
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_infer)
+
+            if hand_cache.should_run() or hand_cache.get() is None:
+                hand_results = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
+                hand_cache.set(hand_results)
+                bench_hand_runs += 1
+            else:
+                hand_results = hand_cache.get()
+            if hand_results is None:
+                hand_results = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
+                hand_cache.set(hand_results)
+                bench_hand_runs += 1
+
+            if face_cache.should_run() or face_cache.get() is None:
+                face_results = face_detector.detect_for_video(mp_image, timestamp_ms)
+                face_cache.set(face_results)
+                bench_face_runs += 1
+            else:
+                face_results = face_cache.get()
+            if face_results is None:
+                face_results = face_detector.detect_for_video(mp_image, timestamp_ms)
+                face_cache.set(face_results)
+                bench_face_runs += 1
+
+            if pose_cache.should_run() or pose_cache.get() is None:
+                pose_results = pose_landmarker.detect_for_video(mp_image, timestamp_ms)
+                pose_cache.set(pose_results)
+                bench_pose_runs += 1
+            else:
+                pose_results = pose_cache.get()
+            if pose_results is None:
+                pose_results = pose_landmarker.detect_for_video(mp_image, timestamp_ms)
+                pose_cache.set(pose_results)
+                bench_pose_runs += 1
             h_frame, w_frame = frame.shape[:2]
 
-            if yolo_worker is not None and frame_idx % cfg.yolo_stride == 0:
+            if yolo_worker is not None and frame_idx % resolved_yolo_stride == 0:
                 yolo_worker.submit(frame.copy())
 
             hands = observe_hands(hand_results)
@@ -369,6 +576,18 @@ def run(cfg: AppConfig) -> None:
             event = engine.update(hands, pose_observation, now, publisher.publish_pill)
             if event.published:
                 print(f"[MQTT] pill published: {event.chosen_pill or 'default'}")
+
+            # Keep bullet-time source frames only when Neo Dodge can use them.
+            should_buffer_for_bullet_time = (
+                event.phase == IN_ROUND
+                and (
+                    event.challenge_kind == "neo_dodge"
+                    or event.celebration_key == "neo_dodge"
+                    or bullet_time_active
+                )
+            )
+            if should_buffer_for_bullet_time:
+                frame_buffer.append(frame.copy())
 
             # Bullet-time : au debut de la celebration du dodge, on fige le
             # buffer et on note l'instant de depart pour piloter la lecture
@@ -421,7 +640,12 @@ def run(cfg: AppConfig) -> None:
             )
             mask = None
             if mask_tracker is not None and matrix_scene:
-                mask = mask_tracker.update(mp_image, timestamp_ms, (h_frame, w_frame))
+                if seg_cache.should_run() or seg_cache.get() is None:
+                    mask = mask_tracker.update(mp_image, timestamp_ms, (h_frame, w_frame))
+                    seg_cache.set(mask)
+                    bench_seg_runs += 1
+                else:
+                    mask = seg_cache.get()
 
             if event.phase == INTRO:
                 # Clip d'intro : la camera et le moteur continuent de tourner,
@@ -596,6 +820,29 @@ def run(cfg: AppConfig) -> None:
                 fps = instant_fps if fps == 0 else (0.9 * fps + 0.1 * instant_fps)
             last_tick = tick
 
+            if bench_enabled:
+                if bench_started_at == 0.0:
+                    bench_started_at = tick
+                bench_frames += 1
+                bench_sum_fps += fps
+                bench_min_fps = min(bench_min_fps, fps)
+                bench_max_fps = max(bench_max_fps, fps)
+                if (tick - bench_started_at) >= cfg.benchmark_seconds:
+                    emit_bench_summary("timeout")
+                    if bench_current_run >= bench_target_runs:
+                        if bench_run_avgs:
+                            avg_over_runs = sum(bench_run_avgs) / len(bench_run_avgs)
+                            print(
+                                "[BENCH] all-runs "
+                                f"runs={len(bench_run_avgs)} fps_avg_mean={avg_over_runs:.1f} "
+                                f"fps_avg_best={max(bench_run_avgs):.1f} fps_avg_worst={min(bench_run_avgs):.1f}"
+                            )
+                        break
+
+                    bench_current_run += 1
+                    print(f"[BENCH] starting run {bench_current_run}/{bench_target_runs}")
+                    reset_bench_run(tick)
+
             if event.phase not in (INTRO, BLUE_ENDING, TRINITY_OUTRO):
                 draw_hud(
                     display,
@@ -610,6 +857,7 @@ def run(cfg: AppConfig) -> None:
             key = cv2.waitKey(1) & 0xFF
 
             if key in (ord("q"), 27):
+                emit_bench_summary("user")
                 break
             if key == 32 and event.phase == INTRO:  # ESPACE : passer l'intro
                 close_intro()

@@ -86,6 +86,26 @@ class YoloWorker:
                 pass
 
 
+class MediaPipeInferenceCache:
+    """Keeps last inference result and schedules runs every N frames."""
+
+    def __init__(self, stride: int) -> None:
+        self.stride = max(1, stride)
+        self._frame_idx = 0
+        self._result = None
+
+    def should_run(self) -> bool:
+        run = (self._frame_idx % self.stride) == 0
+        self._frame_idx += 1
+        return run
+
+    def set(self, result) -> None:
+        self._result = result
+
+    def get(self):
+        return self._result
+
+
 class PersonMaskTracker:
     """Produit un masque de presence personne lisse pour le fond code rain.
 
@@ -108,6 +128,7 @@ class PersonMaskTracker:
         self.blur_ksize = blur_ksize if blur_ksize % 2 == 1 else blur_ksize + 1
         self.invert = invert
         self._prev: np.ndarray | None = None
+        self._blur_scale = 0.5
 
     def update(self, mp_image: "mp.Image", timestamp_ms: int, out_hw: tuple[int, int]) -> np.ndarray | None:
         try:
@@ -130,7 +151,17 @@ class PersonMaskTracker:
 
         # Seuil souple : binarise puis adoucit les bords au flou gaussien.
         mask = (mask >= self.threshold).astype(np.float32)
-        mask = cv2.GaussianBlur(mask, (self.blur_ksize, self.blur_ksize), 0)
+        if self._blur_scale < 1.0:
+            hs = max(1, int(h * self._blur_scale))
+            ws = max(1, int(w * self._blur_scale))
+            small = cv2.resize(mask, (ws, hs), interpolation=cv2.INTER_LINEAR)
+            small_k = max(3, self.blur_ksize // 2)
+            if small_k % 2 == 0:
+                small_k += 1
+            small = cv2.GaussianBlur(small, (small_k, small_k), 0)
+            mask = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            mask = cv2.GaussianBlur(mask, (self.blur_ksize, self.blur_ksize), 0)
 
         # Lissage temporel anti-scintillement.
         if self._prev is not None:
@@ -149,25 +180,60 @@ def ensure_model(name: str) -> str:
     return str(path)
 
 
+def _make_base_options(model_name: str, prefer_gpu: bool = True) -> mpt.BaseOptions:
+    """Create BaseOptions with GPU delegate when supported by the local API.
+
+    MediaPipe Tasks Python has slightly different delegate APIs across versions.
+    This helper keeps startup robust by trying GPU first, then falling back.
+    """
+    model_path = ensure_model(model_name)
+    if prefer_gpu:
+        try:
+            delegate_gpu = mpt.BaseOptions.Delegate.GPU
+            return mpt.BaseOptions(model_asset_path=model_path, delegate=delegate_gpu)
+        except Exception:
+            pass
+    return mpt.BaseOptions(model_asset_path=model_path)
+
+
 def create_hand_landmarker() -> mpt.vision.HandLandmarker:
-    hand_options = mpt.vision.HandLandmarkerOptions(
-        base_options=mpt.BaseOptions(model_asset_path=ensure_model("hand_landmarker.task")),
-        running_mode=mpt.vision.RunningMode.VIDEO,
-        num_hands=2,
-        min_hand_detection_confidence=0.55,
-        min_hand_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
-    return mpt.vision.HandLandmarker.create_from_options(hand_options)
+    try:
+        hand_options = mpt.vision.HandLandmarkerOptions(
+            base_options=_make_base_options("hand_landmarker.task", prefer_gpu=True),
+            running_mode=mpt.vision.RunningMode.VIDEO,
+            num_hands=2,
+            min_hand_detection_confidence=0.55,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        return mpt.vision.HandLandmarker.create_from_options(hand_options)
+    except Exception:
+        hand_options = mpt.vision.HandLandmarkerOptions(
+            base_options=_make_base_options("hand_landmarker.task", prefer_gpu=False),
+            running_mode=mpt.vision.RunningMode.VIDEO,
+            num_hands=2,
+            min_hand_detection_confidence=0.55,
+            min_hand_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        return mpt.vision.HandLandmarker.create_from_options(hand_options)
 
 
 def create_face_detector() -> mpt.vision.FaceDetector:
-    face_options = mpt.vision.FaceDetectorOptions(
-        base_options=mpt.BaseOptions(model_asset_path=ensure_model("face_detector.tflite")),
-        running_mode=mpt.vision.RunningMode.VIDEO,
-        min_detection_confidence=0.55,
-    )
-    return mpt.vision.FaceDetector.create_from_options(face_options)
+    try:
+        face_options = mpt.vision.FaceDetectorOptions(
+            base_options=_make_base_options("face_detector.tflite", prefer_gpu=True),
+            running_mode=mpt.vision.RunningMode.VIDEO,
+            min_detection_confidence=0.55,
+        )
+        return mpt.vision.FaceDetector.create_from_options(face_options)
+    except Exception:
+        face_options = mpt.vision.FaceDetectorOptions(
+            base_options=_make_base_options("face_detector.tflite", prefer_gpu=False),
+            running_mode=mpt.vision.RunningMode.VIDEO,
+            min_detection_confidence=0.55,
+        )
+        return mpt.vision.FaceDetector.create_from_options(face_options)
 
 
 def create_image_segmenter() -> mpt.vision.ImageSegmenter:
@@ -177,22 +243,42 @@ def create_image_segmenter() -> mpt.vision.ImageSegmenter:
     masques de confiance (float 0..1) qui donnent des bords plus doux qu'un
     masque de categorie binaire.
     """
-    segmenter_options = mpt.vision.ImageSegmenterOptions(
-        base_options=mpt.BaseOptions(model_asset_path=ensure_model("selfie_segmenter.tflite")),
-        running_mode=mpt.vision.RunningMode.VIDEO,
-        output_category_mask=False,
-        output_confidence_masks=True,
-    )
-    return mpt.vision.ImageSegmenter.create_from_options(segmenter_options)
+    try:
+        segmenter_options = mpt.vision.ImageSegmenterOptions(
+            base_options=_make_base_options("selfie_segmenter.tflite", prefer_gpu=True),
+            running_mode=mpt.vision.RunningMode.VIDEO,
+            output_category_mask=False,
+            output_confidence_masks=True,
+        )
+        return mpt.vision.ImageSegmenter.create_from_options(segmenter_options)
+    except Exception:
+        segmenter_options = mpt.vision.ImageSegmenterOptions(
+            base_options=_make_base_options("selfie_segmenter.tflite", prefer_gpu=False),
+            running_mode=mpt.vision.RunningMode.VIDEO,
+            output_category_mask=False,
+            output_confidence_masks=True,
+        )
+        return mpt.vision.ImageSegmenter.create_from_options(segmenter_options)
 
 
 def create_pose_landmarker() -> mpt.vision.PoseLandmarker:
-    pose_options = mpt.vision.PoseLandmarkerOptions(
-        base_options=mpt.BaseOptions(model_asset_path=ensure_model("pose_landmarker_lite.task")),
-        running_mode=mpt.vision.RunningMode.VIDEO,
-        num_poses=1,
-        min_pose_detection_confidence=0.55,
-        min_pose_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
-    return mpt.vision.PoseLandmarker.create_from_options(pose_options)
+    try:
+        pose_options = mpt.vision.PoseLandmarkerOptions(
+            base_options=_make_base_options("pose_landmarker_lite.task", prefer_gpu=True),
+            running_mode=mpt.vision.RunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.55,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        return mpt.vision.PoseLandmarker.create_from_options(pose_options)
+    except Exception:
+        pose_options = mpt.vision.PoseLandmarkerOptions(
+            base_options=_make_base_options("pose_landmarker_lite.task", prefer_gpu=False),
+            running_mode=mpt.vision.RunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.55,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        return mpt.vision.PoseLandmarker.create_from_options(pose_options)

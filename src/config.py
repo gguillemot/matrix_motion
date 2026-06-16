@@ -132,9 +132,18 @@ class AppConfig:
     width: int
     height: int
     model: str
+    yolo_device: str
+    yolo_half: bool
+    perf_mode: str
+    perf_target: str
     conf: float
     imgsz: int
     yolo_stride: int
+    mp_scale: float
+    mp_hand_stride: int
+    mp_face_stride: int
+    mp_pose_stride: int
+    mp_seg_stride: int
     disable_yolo: bool
     window_name: str
     windowed: bool
@@ -151,6 +160,8 @@ class AppConfig:
     intro_video: str
     intro_start: float
     intro_end: float
+    benchmark_seconds: float
+    benchmark_runs: int
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -159,9 +170,64 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--model", type=str, default=str(PROJECT_ROOT / "yolov8n.pt"))
+    parser.add_argument(
+        "--yolo-device",
+        type=str,
+        default="auto",
+        help="YOLO device: auto, cpu, cuda, cuda:0 ...",
+    )
+    parser.add_argument(
+        "--yolo-half",
+        action="store_true",
+        help="Enable FP16 for YOLO when running on CUDA/ROCm",
+    )
+    parser.add_argument(
+        "--perf-mode",
+        type=str,
+        choices=("manual", "quality", "balanced", "fast"),
+        default="quality",
+        help="Performance preset. 'manual' keeps explicit mp/yolo tuning flags.",
+    )
+    parser.add_argument(
+        "--perf-target",
+        type=str,
+        choices=("auto", "cpu", "gpu"),
+        default="gpu",
+        help="Preset target hardware. 'auto' detects GPU availability.",
+    )
     parser.add_argument("--conf", type=float, default=0.35)
     parser.add_argument("--imgsz", type=int, default=320)
     parser.add_argument("--yolo-stride", type=int, default=3)
+    parser.add_argument(
+        "--mp-scale",
+        type=float,
+        default=0.75,
+        help="MediaPipe inference scale in (0,1], lower is faster",
+    )
+    parser.add_argument(
+        "--mp-hand-stride",
+        type=int,
+        default=2,
+        help="Run hand inference every N frames",
+    )
+    parser.add_argument(
+        "--mp-face-stride",
+        type=int,
+        default=2,
+        help="Run face inference every N frames",
+    )
+    parser.add_argument(
+        "--mp-pose-stride",
+        type=int,
+        default=2,
+        help="Run pose inference every N frames",
+    )
+    parser.add_argument(
+        "--mp-seg-stride",
+        type=int,
+        default=3,
+        help="Run segmentation every N frames",
+    )
     parser.add_argument("--disable-yolo", action="store_true")
     parser.add_argument("--window-name", type=str, default="THE MATRIX")
     parser.add_argument("--windowed", action="store_true")
@@ -220,6 +286,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=178.0,
         help="fin du segment du clip d'intro, en secondes (2:58)",
     )
+    parser.add_argument(
+        "--benchmark-seconds",
+        type=float,
+        default=0.0,
+        help="run a timed benchmark and exit automatically (0 disables benchmark)",
+    )
+    parser.add_argument(
+        "--benchmark-runs",
+        type=int,
+        default=1,
+        help="number of benchmark runs to execute (used with --benchmark-seconds)",
+    )
     return parser
 
 
@@ -233,9 +311,18 @@ def parse_args(argv: Sequence[str] | None = None) -> AppConfig:
         width=args.width,
         height=args.height,
         model=args.model,
+        yolo_device=args.yolo_device,
+        yolo_half=args.yolo_half,
+        perf_mode=args.perf_mode,
+        perf_target=args.perf_target,
         conf=args.conf,
         imgsz=args.imgsz,
         yolo_stride=max(1, args.yolo_stride),
+        mp_scale=max(0.1, min(1.0, args.mp_scale)),
+        mp_hand_stride=max(1, args.mp_hand_stride),
+        mp_face_stride=max(1, args.mp_face_stride),
+        mp_pose_stride=max(1, args.mp_pose_stride),
+        mp_seg_stride=max(1, args.mp_seg_stride),
         disable_yolo=args.disable_yolo,
         window_name=args.window_name,
         windowed=args.windowed,
@@ -252,4 +339,6 @@ def parse_args(argv: Sequence[str] | None = None) -> AppConfig:
         intro_video=args.intro_video,
         intro_start=args.intro_start,
         intro_end=args.intro_end,
+        benchmark_seconds=max(0.0, args.benchmark_seconds),
+        benchmark_runs=max(1, args.benchmark_runs),
     )

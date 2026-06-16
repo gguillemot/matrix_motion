@@ -82,6 +82,33 @@ class MatrixRain:
             string.digits + string.ascii_uppercase + "#$%&*+-=<>?@"
         )
         self.ascii_font_scale = max(0.42, min(0.56, self.spacing / 22.0))
+        self._tile_size = max(12, self.spacing + 8)
+        self._glyph_cache: dict[tuple[str, int, bool], np.ndarray] = {}
+
+    def _glyph_tile(self, char: str, brightness: int, white: bool) -> np.ndarray:
+        key = (char, brightness, white)
+        cached = self._glyph_cache.get(key)
+        if cached is not None:
+            return cached
+
+        tile = np.zeros((self._tile_size, self._tile_size, 3), dtype=np.uint8)
+        color = (
+            (brightness, brightness, brightness)
+            if white
+            else (35, brightness, 70)
+        )
+        cv2.putText(
+            tile,
+            char,
+            (2, self._tile_size - 3),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            self.ascii_font_scale,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+        self._glyph_cache[key] = tile
+        return tile
 
     def _render(
         self, canvas: np.ndarray, boost: bool = False, white: bool = False
@@ -103,23 +130,25 @@ class MatrixRain:
 
                 char = random.choice(self.charset)
                 brightness = max(95, 255 - trail_idx * 35)
-                # Pluie blanche pendant la celebration "Follow the White Rabbit"
-                color = (
-                    (brightness, brightness, brightness)
-                    if white
-                    else (35, brightness, 70)
-                )
+                tile = self._glyph_tile(char, brightness, white)
+                y0 = trail_y - (self._tile_size - 3)
+                if y0 >= self.height or x >= self.width:
+                    continue
+                x1 = max(0, x)
+                y1 = max(0, y0)
+                x2 = min(self.width, x + self._tile_size)
+                y2 = min(self.height, y0 + self._tile_size)
+                if x2 <= x1 or y2 <= y1:
+                    continue
 
-                cv2.putText(
-                    canvas,
-                    char,
-                    (x, trail_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    self.ascii_font_scale,
-                    color,
-                    1,
-                    cv2.LINE_AA,
-                )
+                tx1 = x1 - x
+                ty1 = y1 - y0
+                tx2 = tx1 + (x2 - x1)
+                ty2 = ty1 + (y2 - y1)
+                src = tile[ty1:ty2, tx1:tx2]
+                dst = canvas[y1:y2, x1:x2]
+                # Lighten only where glyph pixels are present.
+                np.maximum(dst, src, out=dst)
 
             self.drops[col] += speed
             if self.drops[col] > self.height + random.randint(0, 150):

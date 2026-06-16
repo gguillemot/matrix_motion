@@ -186,6 +186,55 @@ uv run --project matrix_motion python main.py --windowed
 uv run --project matrix_motion python main.py --round-duration 10
 ```
 
+## Performance (CPU/GPU)
+
+Le projet inclut une optimisation runtime pour MediaPipe et YOLO, avec fallback propre si un backend GPU n'est pas disponible.
+
+Fonctionnalites actuellement implementees:
+- Selection explicite du device YOLO avec fallback CPU.
+- Tentative delegate GPU MediaPipe puis fallback CPU.
+- Frame skipping MediaPipe configurable (hand, face, pose, segmentation).
+- Reduction de resolution d'inference MediaPipe configurable.
+- Flou du masque de segmentation optimise (flou sur masque reduit puis re-echantillonnage).
+
+Options CLI utiles:
+- `--yolo-device` : `auto`, `cpu`, `cuda`, `cuda:0`, ...
+- `--yolo-half` : active FP16 quand backend CUDA/ROCm disponible.
+- `--mp-scale` : echelle d'inference MediaPipe (defaut 0.75).
+- `--mp-hand-stride`, `--mp-face-stride`, `--mp-pose-stride`, `--mp-seg-stride` : inference tous les N frames.
+- `--perf-mode` : `manual`, `quality`, `balanced`, `fast`.
+- `--perf-target` : `auto`, `cpu`, `gpu`.
+- `--benchmark-seconds` : lance un benchmark chronometre et quitte automatiquement.
+- `--benchmark-runs` : nombre de runs benchmark consecutifs (moyenne finale affichee).
+
+Par defaut, l'application utilise `--perf-mode quality --perf-target gpu`.
+Si aucun backend GPU CUDA/ROCm n'est detecte, le preset bascule automatiquement vers CPU.
+
+Exemples:
+
+```bash
+# Preset par defaut (quality + gpu, fallback CPU automatique)
+uv run --project matrix_motion python main.py --camera-index 0
+
+# Preset recommande pour machine sans GPU
+uv run --project matrix_motion python main.py --camera-index 0 --perf-mode balanced --perf-target cpu
+
+# Preset recommande pour machine avec GPU
+uv run --project matrix_motion python main.py --camera-index 0 --perf-mode balanced --perf-target gpu
+
+# Preset auto adapte a la machine
+uv run --project matrix_motion python main.py --camera-index 0 --perf-mode balanced --perf-target auto
+
+# Tuning manuel MediaPipe sans YOLO
+uv run --project matrix_motion python main.py --camera-index 0 --disable-yolo --mp-scale 0.75 --mp-hand-stride 2 --mp-face-stride 2 --mp-pose-stride 2 --mp-seg-stride 3
+
+# Benchmark CPU (8 secondes, resume FPS et cadence d'inference)
+uv run --project matrix_motion python main.py --camera-index 0 --disable-yolo --windowed --benchmark-seconds 8
+
+# Benchmark plus stable sur 3 runs
+uv run --project matrix_motion python main.py --camera-index 0 --disable-yolo --windowed --benchmark-seconds 8 --benchmark-runs 3
+```
+
 ## Raspberry Pi notes
 
 - Start with lower resolution for better FPS:
