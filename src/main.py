@@ -9,7 +9,6 @@ from pathlib import Path
 import cv2
 import mediapipe as mp
 import numpy as np
-from ultralytics import YOLO
 
 from src.config import (
     BULLET_STOP_VIDEO_END,
@@ -61,11 +60,9 @@ from src.rendering import (
     draw_score_screen,
     draw_spoon,
     draw_trinity_outro_text,
-    draw_yolo_detections,
 )
 from src.tracking import (
     PersonMaskTracker,
-    YoloWorker,
     create_face_detector,
     create_hand_landmarker,
     create_image_segmenter,
@@ -108,8 +105,6 @@ def run(cfg: AppConfig) -> None:
         )
     )
 
-    yolo_worker: YoloWorker | None = None
-    model: YOLO | None = None
     hand_landmarker = None
     face_detector = None
     pose_landmarker = None
@@ -134,16 +129,6 @@ def run(cfg: AppConfig) -> None:
     )
 
     try:
-        if not cfg.disable_yolo:
-            try:
-                model = YOLO(cfg.model)
-                yolo_worker = YoloWorker(model, cfg.imgsz, cfg.conf)
-                print(
-                    f"[YOLO] loaded {cfg.model} (background thread, imgsz={cfg.imgsz})"
-                )
-            except Exception as exc:
-                print(f"[YOLO] disabled (load failed): {exc}")
-
         hand_landmarker = create_hand_landmarker()
         face_detector = create_face_detector()
         pose_landmarker = create_pose_landmarker()
@@ -357,9 +342,6 @@ def run(cfg: AppConfig) -> None:
             pose_results = pose_landmarker.detect_for_video(mp_image, timestamp_ms)
             h_frame, w_frame = frame.shape[:2]
 
-            if yolo_worker is not None and frame_idx % cfg.yolo_stride == 0:
-                yolo_worker.submit(frame.copy())
-
             hands = observe_hands(hand_results)
             pose_observation = observe_pose(pose_results)
 
@@ -406,8 +388,6 @@ def run(cfg: AppConfig) -> None:
             # Outro Trinity : libere le lecteur des qu'on quitte la phase.
             if event.phase != TRINITY_OUTRO and trinity_cap is not None:
                 close_trinity_outro()
-
-            cached_boxes = yolo_worker.get_boxes() if yolo_worker is not None else []
 
             # Masque personne pour le fond code rain. Calcule uniquement dans
             # les phases "Matrix" en direct (pas l'intro, pas la fin bleue, pas
@@ -457,7 +437,7 @@ def run(cfg: AppConfig) -> None:
                     off_x, off_y = (w_frame - new_w) // 2, (h_frame - new_h) // 2
                     display[off_y : off_y + new_h, off_x : off_x + new_w] = resized
                 draw_intro_hint(display)
-                persons = faces = poses = 0
+                faces = poses = 0
 
             elif event.phase == TRINITY_OUTRO:
                 # Clip outro "Trinity" : joue 1:41 -> 1:44, gele sur la derniere
@@ -492,22 +472,19 @@ def run(cfg: AppConfig) -> None:
                 if elapsed >= trinity_clip_dur:
                     draw_trinity_outro_text(display)
                     draw_outro_qr(display)
-                persons = faces = poses = 0
+                faces = poses = 0
 
             elif event.phase == BLUE_ENDING:
                 # Pilule bleue : camera brute, aucun effet Matrix, ni pluie ni
                 # HUD ni squelettes. Juste l'invite a rejouer.
                 display = frame
                 draw_blue_ending(display, event)
-                persons = faces = poses = 0
+                faces = poses = 0
 
             elif replay_frame is not None:
                 # Pendant le rejeu : pas d'overlays de detection ni d'ecran de
                 # round, juste l'effet bullet-time sur les frames du passe.
                 display = replay_frame
-                persons = draw_yolo_detections(
-                    display, cached_boxes, getattr(model, "names", {}), draw=False
-                )
                 faces = len(face_results.detections or [])
                 poses = len(pose_results.pose_landmarks or [])
 
@@ -525,9 +502,6 @@ def run(cfg: AppConfig) -> None:
                 off_x = (w_frame - new_w) // 2
                 off_y = (h_frame - new_h) // 2
                 display[off_y : off_y + new_h, off_x : off_x + new_w] = resized
-                persons = draw_yolo_detections(
-                    display, cached_boxes, getattr(model, "names", {}), draw=False
-                )
                 faces = len(face_results.detections or [])
                 poses = len(pose_results.pose_landmarks or [])
 
@@ -541,14 +515,6 @@ def run(cfg: AppConfig) -> None:
                     )
                 else:
                     display = frame
-                # Les boites YOLO ne sont dessinees qu'en attract : pendant la
-                # partie, elles parasitent la lecture des figures.
-                persons = draw_yolo_detections(
-                    display,
-                    cached_boxes,
-                    getattr(model, "names", {}),
-                    draw=event.phase == ATTRACT,
-                )
 
                 faces = draw_face_detections(display, face_results.detections)
 
@@ -596,7 +562,6 @@ def run(cfg: AppConfig) -> None:
                 draw_hud(
                     display,
                     fps=fps,
-                    persons=persons,
                     faces=faces,
                     poses=poses,
                     event=event,
@@ -633,8 +598,6 @@ def run(cfg: AppConfig) -> None:
             close_trinity_outro()
         except NameError:
             pass  # boucle jamais atteinte
-        if yolo_worker is not None:
-            yolo_worker.close()
         if hand_landmarker is not None:
             hand_landmarker.close()
         if face_detector is not None:

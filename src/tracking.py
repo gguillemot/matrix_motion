@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import queue
 import ssl
-import threading
 import urllib.request
 from pathlib import Path
 
@@ -10,7 +8,6 @@ import cv2
 import mediapipe as mp
 import mediapipe.tasks as mpt
 import numpy as np
-from ultralytics import YOLO
 
 # Bypass SSL (meme mecanisme que les POC d'origine) : les Python installes via
 # Homebrew n'ont souvent pas de bundle de certificats, ce qui fait echouer le
@@ -37,53 +34,6 @@ _MEDIAPIPE_MODELS = {
         "image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite"
     ),
 }
-
-
-class YoloWorker:
-    """Runs YOLO inference in a background thread to avoid blocking the main loop."""
-
-    def __init__(self, model: YOLO, imgsz: int, conf: float) -> None:
-        self.model = model
-        self.imgsz = imgsz
-        self.conf = conf
-        self._in: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=1)
-        self._boxes: list = []
-        self._lock = threading.Lock()
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def submit(self, frame: np.ndarray) -> None:
-        try:
-            self._in.put_nowait(frame)
-        except queue.Full:
-            pass
-
-    def get_boxes(self) -> list:
-        with self._lock:
-            return list(self._boxes)
-
-    def close(self) -> None:
-        self._stop_event.set()
-        try:
-            self._in.put_nowait(None)
-        except queue.Full:
-            pass
-        self._thread.join(timeout=1.0)
-
-    def _run(self) -> None:
-        while not self._stop_event.is_set():
-            frame = self._in.get()
-            if frame is None:
-                break
-
-            try:
-                results = self.model.predict(frame, imgsz=self.imgsz, conf=self.conf, verbose=False)
-                boxes = results[0].boxes
-                with self._lock:
-                    self._boxes = boxes if boxes is not None else []
-            except Exception:
-                pass
 
 
 class PersonMaskTracker:

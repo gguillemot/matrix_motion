@@ -2,9 +2,9 @@
 
 Real-time demo with a camera in Matrix style:
 - Arcade mini-game for the BreizhCamp 2026 booth (30-45 s sessions, see below)
-- Object/person detection (YOLOv8)
 - Face detection (MediaPipe)
 - Hand gesture recognition (MediaPipe Hands)
+- Pose tracking (MediaPipe Pose)
 - Fullscreen neon green HUD + Matrix rain effect (code rain rendered **behind** the segmented player)
 - Optional MQTT trigger to your NodeMCU servo project
 
@@ -58,7 +58,7 @@ Les 5 figures (seuils geometriques documentes dans `src/challenges.py`) :
 
 La detection de main ouverte est independante du miroir camera et accepte paume comme revers (test geometrique du pouce par rapport a la direction de la main, voir `finger_states` dans `src/challenges.py`).
 
-Reglages : `--round-duration 8.0` (temps par figure), `--countdown-duration 3.0`. Sur le stand, lancer avec `--disable-yolo` pour maximiser les FPS.
+Reglages : `--round-duration 8.0` (temps par figure), `--countdown-duration 3.0`.
 
 ## Fond "code rain" par segmentation
 
@@ -82,7 +82,7 @@ Degradation propre : si le modele ou MediaPipe echoue, le jeu retombe automatiqu
 
 - `src/main.py`: entry point that wires the app together
 - `src/config.py`: CLI and environment config
-- `src/tracking.py`: MediaPipe and YOLO setup, plus `PersonMaskTracker` for code-rain segmentation
+- `src/tracking.py`: MediaPipe setup and `PersonMaskTracker` for code-rain segmentation
 - `src/game_engine.py`: campaign state machine and round progression
 - `src/challenges.py`: gesture recognition and campaign definitions
 - `src/rendering.py`: HUD, overlays, challenge cards, and visual effects
@@ -155,9 +155,6 @@ uv run --project matrix_motion python -m unittest discover -s tests
 ## Useful options
 
 ```bash
-# Disable YOLO object detection (keep face + hand)
-uv run --project matrix_motion python main.py --disable-yolo
-
 # Disable MQTT completely
 uv run --project matrix_motion python main.py --mqtt-disable
 
@@ -176,10 +173,10 @@ uv run --project matrix_motion python main.py --round-duration 10
 - Start with lower resolution for better FPS:
 
 ```bash
-uv run --project matrix_motion python main.py --width 960 --height 540 --imgsz 480
+uv run --project matrix_motion python main.py --width 960 --height 540
 ```
 
-- If performance is low, increase `--yolo-stride` (ex: `3` or `4`) or use `--disable-yolo`.
+- The app now relies only on MediaPipe for tracking and segmentation.
 
 ## Assets
 

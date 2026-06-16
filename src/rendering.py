@@ -379,49 +379,6 @@ def _draw_progress_bar(
         cv2.rectangle(frame, (x, y), (x + fill, y + height), color, -1)
 
 
-# ---------------------------------------------------------------------------
-# Detections (debug / feedback visuel)
-# ---------------------------------------------------------------------------
-
-
-def draw_yolo_detections(
-    frame: np.ndarray, cached_boxes: list, model_names, draw: bool = True
-) -> int:
-    persons = 0
-
-    for box in cached_boxes:
-        cls_id = int(box.cls[0])
-        conf = float(box.conf[0])
-        label = (
-            model_names.get(cls_id, str(cls_id))
-            if hasattr(model_names, "get")
-            else str(cls_id)
-        )
-
-        if label == "person":
-            persons += 1
-
-        if not draw:
-            continue
-
-        x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
-        cv2.rectangle(frame, (x1, y1), (x2, y2), MATRIX_GREEN, 2)
-        cv2.rectangle(frame, (x1 + 2, y1 + 2), (x2 - 2, y2 - 2), MATRIX_DARK_GREEN, 1)
-        text = f"{label} {conf:.2f}"
-        cv2.putText(
-            frame,
-            text,
-            (x1, max(20, y1 - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            MATRIX_GREEN,
-            2,
-            cv2.LINE_AA,
-        )
-
-    return persons
-
-
 def draw_face_detections(frame: np.ndarray, detections) -> int:
     faces = 0
 
@@ -1211,7 +1168,6 @@ def load_challenge_background(
 def draw_hud(
     frame: np.ndarray,
     fps: float,
-    persons: int,
     faces: int,
     poses: int,
     event: GameEvent,
@@ -1243,7 +1199,7 @@ def draw_hud(
     )
     cv2.putText(
         frame,
-        f"PERSONS: {persons}",
+        f"FACES: {faces}",
         (170, 58),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,
@@ -1253,18 +1209,8 @@ def draw_hud(
     )
     cv2.putText(
         frame,
-        f"FACES: {faces}",
-        (350, 58),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        MATRIX_GREEN,
-        1,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        frame,
         f"POSES: {poses}",
-        (500, 58),
+        (320, 58),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,
         MATRIX_GREEN,

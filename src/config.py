@@ -80,11 +80,6 @@ class AppConfig:
     camera_index: int
     width: int
     height: int
-    model: str
-    conf: float
-    imgsz: int
-    yolo_stride: int
-    disable_yolo: bool
     window_name: str
     windowed: bool
     mqtt_disable: bool
@@ -107,11 +102,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
-    parser.add_argument("--model", type=str, default=str(PROJECT_ROOT / "yolov8n.pt"))
-    parser.add_argument("--conf", type=float, default=0.35)
-    parser.add_argument("--imgsz", type=int, default=320)
-    parser.add_argument("--yolo-stride", type=int, default=3)
-    parser.add_argument("--disable-yolo", action="store_true")
     parser.add_argument("--window-name", type=str, default="THE MATRIX")
     parser.add_argument("--windowed", action="store_true")
 
@@ -181,11 +171,6 @@ def parse_args(argv: Sequence[str] | None = None) -> AppConfig:
         camera_index=args.camera_index,
         width=args.width,
         height=args.height,
-        model=args.model,
-        conf=args.conf,
-        imgsz=args.imgsz,
-        yolo_stride=max(1, args.yolo_stride),
-        disable_yolo=args.disable_yolo,
         window_name=args.window_name,
         windowed=args.windowed,
         mqtt_disable=args.mqtt_disable,
