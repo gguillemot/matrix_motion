@@ -180,6 +180,10 @@ class FullPlaythroughTests(unittest.TestCase):
         event = engine.update([palm(), palm()], None, 1.05, lambda pill: True)
 
         self.assertEqual(event.phase, PILL_CHOICE)
-        self.assertEqual(event.round_total, 4)
+        # La campagne par defaut intercale des quiz : on verifie que les 4
+        # figures sont bien regenerees, quel que soit le nombre de quiz inseres.
+        figure_rounds = sum(c.kind != "quiz" for c in engine.challenges)
+        self.assertEqual(figure_rounds, 4)
+        self.assertEqual(event.round_total, len(engine.challenges))
         self.assertEqual(event.score, 0)
         self.assertEqual(event.round_results, [])

@@ -1,0 +1,124 @@
+{
+  "questions": [
+    {
+      "id": "pill_choice",
+      "question": "Quelle pilule Neo avale-t-il pour decouvrir la verite ?",
+      "answers": ["La rouge", "La bleue"],
+      "correct_index": 0,
+      "difficulty": "easy",
+      "explanation": "La pilule rouge revele la realite ; la bleue ramene a l'illusion."
+    },
+    {
+      "id": "the_one_name",
+      "question": "Quel est le nom de l'Elu ?",
+      "answers": ["Morpheus", "Neo", "Cypher", "Tank"],
+      "correct_index": 1,
+      "difficulty": "easy",
+      "explanation": "Neo est l'anagramme de \u00ab One \u00bb : l'Elu."
+    },
+    {
+      "id": "spoon_quote",
+      "question": "Que revele l'enfant au sujet de la cuillere ?",
+      "answers": ["Elle est tordue", "Il n'y a pas de cuillere"],
+      "correct_index": 1,
+      "difficulty": "easy",
+      "explanation": "\u00ab There is no spoon \u00bb : c'est toi qui plies, pas la cuillere."
+    },
+    {
+      "id": "morpheus_role",
+      "question": "Qui propose les deux pilules a Neo ?",
+      "answers": ["Trinity", "L'Oracle", "Morpheus", "Agent Smith"],
+      "correct_index": 2,
+      "difficulty": "easy",
+      "explanation": "Morpheus guide Neo et lui offre le choix."
+    },
+    {
+      "id": "last_human_city",
+      "question": "Comment s'appelle la derniere cite humaine ?",
+      "answers": ["Zion", "Babylone", "Olympia", "Eden"],
+      "correct_index": 0,
+      "difficulty": "medium",
+      "explanation": "Zion est l'ultime refuge des humains, pres du noyau terrestre."
+    },
+    {
+      "id": "trinity_intro",
+      "question": "Quel personnage feminin sauve Neo a plusieurs reprises ?",
+      "answers": ["Switch", "Trinity", "L'Oracle", "Niobe"],
+      "correct_index": 1,
+      "difficulty": "medium",
+      "explanation": "Trinity, hackeuse legendaire et amour de Neo."
+    },
+    {
+      "id": "agent_smith",
+      "question": "Quel agent poursuit obstinement Neo ?",
+      "answers": ["Agent Brown", "Agent Jones", "Agent Smith", "Le Merovingien"],
+      "correct_index": 2,
+      "difficulty": "medium",
+      "explanation": "L'Agent Smith devient l'ennemi recurrent de toute la saga."
+    },
+    {
+      "id": "oracle_role",
+      "question": "Quel personnage predit l'avenir aux humains ?",
+      "answers": ["L'Architecte", "L'Oracle", "Le Faiseur de cles", "Seraph"],
+      "correct_index": 1,
+      "difficulty": "medium",
+      "explanation": "L'Oracle, programme intuitif, oriente le destin de Neo."
+    },
+    {
+      "id": "red_pill_meaning",
+      "question": "Que symbolise aujourd'hui l'expression \u00ab pilule rouge \u00bb ?",
+      "answers": ["Voir une verite cachee", "Faire la sieste", "Gagner au loto"],
+      "correct_index": 0,
+      "difficulty": "medium",
+      "explanation": "Elle est devenue une metaphore de l'eveil a une realite cachee."
+    },
+    {
+      "id": "neo_job",
+      "question": "Quel est le metier de jour de Thomas Anderson ?",
+      "answers": ["Programmeur", "Journaliste", "Policier", "Medecin"],
+      "correct_index": 0,
+      "difficulty": "medium",
+      "explanation": "Le jour il code pour une entreprise, la nuit il hacke sous le nom de Neo."
+    },
+    {
+      "id": "matrix_year",
+      "question": "En quelle annee sort le premier film Matrix ?",
+      "answers": ["1997", "1999", "2003", "2005"],
+      "correct_index": 1,
+      "difficulty": "hard",
+      "explanation": "The Matrix est sorti en 1999 et a revolutionne les effets speciaux."
+    },
+    {
+      "id": "bullet_time",
+      "question": "Comment s'appelle l'effet visuel ralenti emblematique du film ?",
+      "answers": ["Slow scan", "Bullet time", "Freeze frame", "Time warp"],
+      "correct_index": 1,
+      "difficulty": "hard",
+      "explanation": "Le \u00ab bullet time \u00bb fige l'action pendant que la camera tourne autour."
+    },
+    {
+      "id": "white_rabbit",
+      "question": "Quel animal Neo doit-il suivre au debut du film ?",
+      "answers": ["Un chat noir", "Un lapin blanc", "Un corbeau", "Un serpent"],
+      "correct_index": 1,
+      "difficulty": "hard",
+      "explanation": "\u00ab Follow the white rabbit \u00bb : clin d'oeil a Alice au pays des merveilles."
+    },
+    {
+      "id": "machines_use",
+      "question": "A quoi les machines utilisent-elles les humains ?",
+      "answers": ["Source d'energie", "Main d'oeuvre", "Compagnie", "Cobayes"],
+      "correct_index": 0,
+      "difficulty": "hard",
+      "explanation": "Les humains servent de piles biologiques aux machines."
+    },
+    {
+      "id": "deja_vu_cat",
+      "question": "Dans la Matrice, un \u00ab deja-vu \u00bb signale...",
+      "answers": ["Un bug du systeme", "De la chance", "Un reve", "Un agent ami"],
+      "correct_index": 0,
+      "difficulty": "hard",
+      "explanation": "Un deja-vu (le chat noir) trahit une modification de la Matrice."
+    }
+  ]
+}
