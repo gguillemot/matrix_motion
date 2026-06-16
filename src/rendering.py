@@ -753,6 +753,112 @@ def draw_pill_choice(frame: np.ndarray, event: GameEvent) -> None:
         )
 
 
+def draw_badge_scan_screen(
+    frame: np.ndarray,
+    event: GameEvent,
+    qr_result: str | None,
+    result_at: float,
+) -> None:
+    """Écran intermédiaire (30 s) entre le score et l'outro Trinity.
+
+    Affiche la caméra live (scène Matrix déjà composée) avec une invitation
+    bien visible à scanner son badge QR, un timer et le résultat décodé.
+    """
+    h, w = frame.shape[:2]
+    now = time.monotonic()
+
+    # --- Bandeau titre haut (sous le HUD) ----------------------------------
+    by = 80
+    cv2.rectangle(frame, (0, by), (w, by + 52), (5, 18, 5), -1)
+    cv2.rectangle(frame, (0, by + 52), (w, by + 54), MATRIX_DARK_GREEN, -1)
+    _put_centered(
+        frame, "SCANNEZ VOTRE BADGE", by + 36, 1.3, MATRIX_GREEN, 3, glow=True
+    )
+
+    # --- Zone de scan centrale ---------------------------------------------
+    zone_w, zone_h = 360, 270
+    zx = (w - zone_w) // 2
+    zy = by + 70
+    zx2, zy2 = zx + zone_w, zy + zone_h
+
+    cv2.rectangle(frame, (zx, zy), (zx2 - 1, zy2 - 1), MATRIX_GREEN, 2, cv2.LINE_AA)
+
+    has_result = (
+        qr_result is not None
+        and result_at > 0
+        and (now - result_at) < _QR_DISPLAY_SEC
+    )
+
+    if has_result:
+        cv2.putText(
+            frame, "BADGE LU !",
+            (zx + 20, zy + 52),
+            cv2.FONT_HERSHEY_DUPLEX, 1.1, (80, 255, 80), 2, cv2.LINE_AA,
+        )
+        assert qr_result is not None
+        line_len = 30
+        text = qr_result if len(qr_result) <= 120 else qr_result[:117] + "..."
+        lines = [text[i : i + line_len] for i in range(0, len(text), line_len)][:5]
+        for i, line in enumerate(lines):
+            cv2.putText(
+                frame, line,
+                (zx + 20, zy + 96 + i * 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, MATRIX_PALE_GREEN, 1, cv2.LINE_AA,
+            )
+    else:
+        # Quatre coins clignotants style viseur
+        cl = 20
+        pad = 24
+        sx, sy = zx + pad, zy + pad
+        ex, ey = zx2 - pad, zy2 - pad
+        col = MATRIX_GREEN if _blink(0.5) else MATRIX_DARK_GREEN
+        for (ax, ay), (bx, by_) in [
+            ((sx, sy), (sx + cl, sy)), ((sx, sy), (sx, sy + cl)),
+            ((ex, sy), (ex - cl, sy)), ((ex, sy), (ex, sy + cl)),
+            ((sx, ey), (sx + cl, ey)), ((sx, ey), (sx, ey - cl)),
+            ((ex, ey), (ex - cl, ey)), ((ex, ey), (ex, ey - cl)),
+        ]:
+            cv2.line(frame, (ax, ay), (bx, by_), col, 3)
+        # Ligne de scan animée
+        scan_y = int(sy + (ey - sy) * ((now % 1.8) / 1.8))
+        cv2.line(frame, (sx + 6, scan_y), (ex - 6, scan_y), MATRIX_GREEN, 2, cv2.LINE_AA)
+        # Invite
+        _put_centered(
+            frame, "Pointez votre badge vers la camera",
+            zy + zone_h // 2 + 20, 0.72, MATRIX_PALE_GREEN, 2, cv2.FONT_HERSHEY_SIMPLEX,
+        )
+
+    # --- Timer en bas de la zone -------------------------------------------
+    time_left = event.badge_scan_time_left
+    ratio = time_left / 30.0
+    bar_x, bar_w = zx, zone_w
+    bar_y = zy2 + 10
+    _draw_progress_bar(frame, bar_x, bar_y, bar_w, 10, ratio, MATRIX_GREEN)
+    cv2.putText(
+        frame,
+        f"{int(time_left) + 1}s",
+        (zx + bar_w + 6, bar_y + 9),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.52, MATRIX_GREEN, 1, cv2.LINE_AA,
+    )
+
+    # --- Invite rejouer (bas d'écran) --------------------------------------
+    if _blink(0.9) or event.start_hold_progress > 0:
+        _put_centered(
+            frame, "2 PAUMES OUVERTES POUR REJOUER",
+            h - 70, 0.9, MATRIX_GREEN, 2,
+        )
+    if event.start_hold_progress > 0:
+        bar_width = 320
+        _draw_progress_bar(
+            frame,
+            (w - bar_width) // 2,
+            h - 50,
+            bar_width,
+            14,
+            event.start_hold_progress,
+        )
+
+
 def draw_blue_ending(frame: np.ndarray, event: GameEvent) -> None:
     """Pilule bleue : camera normale, aucun effet Matrix. Texte discret et
     invite a rejouer (gris neutres, surtout pas de vert Matrix)."""
@@ -1440,6 +1546,111 @@ def draw_score_screen(frame: np.ndarray, event: GameEvent) -> None:
             bar_width,
             14,
             event.start_hold_progress,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Zone de scan de badge QR (écran de score)
+# ---------------------------------------------------------------------------
+
+_QR_ZONE_W = 290
+_QR_ZONE_H = 140
+_QR_ZONE_MARGIN = 16
+_QR_DISPLAY_SEC = 6.0  # durée d'affichage du résultat après scan
+
+
+def draw_qr_scan_zone(
+    frame: np.ndarray,
+    qr_result: str | None,
+    result_at: float,
+    *,
+    y_start: int | None = None,
+) -> None:
+    """Zone en haut à droite permettant aux participants de scanner leur badge QR.
+
+    Affiche une animation de scan quand aucun code n'est lu, puis le contenu
+    décodé pendant `_QR_DISPLAY_SEC` secondes.
+
+    `y_start` fixe le bord supérieur de la zone (px). Si None, la zone est
+    placée sous le bandeau HUD (comportement par défaut).
+    """
+    h, w = frame.shape[:2]
+    if y_start is None:
+        y_start = 80 + _QR_ZONE_MARGIN  # sous le HUD
+    zx = w - _QR_ZONE_W - _QR_ZONE_MARGIN
+    zy = y_start
+    zx2, zy2 = zx + _QR_ZONE_W, zy + _QR_ZONE_H
+    if zx < 0 or zy2 > h:
+        return
+
+    # Fond semi-opaque
+    roi = frame[zy:zy2, zx:zx2]
+    dark = np.full_like(roi, (5, 15, 5))
+    cv2.addWeighted(dark, 0.80, roi, 0.20, 0, roi)
+    frame[zy:zy2, zx:zx2] = roi
+
+    # Bordure verte
+    cv2.rectangle(frame, (zx, zy), (zx2 - 1, zy2 - 1), MATRIX_GREEN, 1, cv2.LINE_AA)
+
+    # Titre
+    title = "SCANNEZ VOTRE BADGE"
+    (tw, _), _ = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
+    cv2.putText(
+        frame, title,
+        (zx + (_QR_ZONE_W - tw) // 2, zy + 16),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.44, MATRIX_GREEN, 1, cv2.LINE_AA,
+    )
+    cv2.line(frame, (zx + 8, zy + 22), (zx2 - 8, zy + 22), MATRIX_DARK_GREEN, 1)
+
+    now = time.monotonic()
+    has_result = (
+        qr_result is not None
+        and result_at > 0
+        and (now - result_at) < _QR_DISPLAY_SEC
+    )
+
+    if has_result:
+        # Succès : affiche le contenu décodé
+        cv2.putText(
+            frame, "BADGE LU !",
+            (zx + 10, zy + 50),
+            cv2.FONT_HERSHEY_DUPLEX, 0.65, (80, 255, 80), 2, cv2.LINE_AA,
+        )
+        assert qr_result is not None  # guaranteed by has_result
+        text = qr_result if len(qr_result) <= 34 else qr_result[:31] + "..."
+        line_len = 26
+        lines = [text[i : i + line_len] for i in range(0, len(text), line_len)][:3]
+        for i, line in enumerate(lines):
+            cv2.putText(
+                frame, line,
+                (zx + 10, zy + 76 + i * 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, MATRIX_PALE_GREEN, 1, cv2.LINE_AA,
+            )
+    else:
+        # Animation de scan : 4 coins + ligne mobile
+        cl = 12  # longueur des coins
+        pad = 28
+        sx, sy = zx + pad, zy + 30
+        ex, ey = zx2 - pad, zy2 - 14
+        col = MATRIX_GREEN if _blink(0.55) else MATRIX_DARK_GREEN
+        cv2.line(frame, (sx, sy), (sx + cl, sy), col, 2)
+        cv2.line(frame, (sx, sy), (sx, sy + cl), col, 2)
+        cv2.line(frame, (ex, sy), (ex - cl, sy), col, 2)
+        cv2.line(frame, (ex, sy), (ex, sy + cl), col, 2)
+        cv2.line(frame, (sx, ey), (sx + cl, ey), col, 2)
+        cv2.line(frame, (sx, ey), (sx, ey - cl), col, 2)
+        cv2.line(frame, (ex, ey), (ex - cl, ey), col, 2)
+        cv2.line(frame, (ex, ey), (ex, ey - cl), col, 2)
+        # Ligne de scan animée
+        scan_y = int(sy + (ey - sy) * ((now % 1.4) / 1.4))
+        cv2.line(frame, (sx + 4, scan_y), (ex - 4, scan_y), MATRIX_GREEN, 1, cv2.LINE_AA)
+        # Invite textuelle
+        hint = "Montrez votre badge"
+        (hw, _), _ = cv2.getTextSize(hint, cv2.FONT_HERSHEY_SIMPLEX, 0.40, 1)
+        cv2.putText(
+            frame, hint,
+            (zx + (_QR_ZONE_W - hw) // 2, zy2 - 6),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.40, MATRIX_PALE_GREEN, 1, cv2.LINE_AA,
         )
 
 

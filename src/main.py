@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -10,6 +11,14 @@ import cv2
 import mediapipe as mp
 import numpy as np
 from ultralytics import YOLO
+
+try:
+    from pyzbar.pyzbar import decode as _pyzbar_decode
+    _PYZBAR_AVAILABLE: bool = True
+except ImportError:
+    def _pyzbar_decode(img):  # type: ignore[misc]
+        return []
+    _PYZBAR_AVAILABLE = False
 
 from src.config import (
     BULLET_STOP_VIDEO_END,
@@ -30,6 +39,7 @@ from src.config import (
 from src.challenges import observe_hands, observe_pose
 from src.game_engine import (
     ATTRACT,
+    BADGE_SCAN,
     BLUE_ENDING,
     COUNTDOWN,
     IN_ROUND,
@@ -44,6 +54,7 @@ from src.rendering import (
     MatrixRain,
     compose_matrix_scene,
     draw_attract_screen,
+    draw_badge_scan_screen,
     draw_blue_ending,
     draw_celebration,
     draw_countdown,
@@ -59,6 +70,7 @@ from src.rendering import (
     draw_round_overlay,
     draw_bullet_stop,
     draw_outro_qr,
+    draw_qr_scan_zone,
     draw_score_screen,
     draw_spoon,
     draw_trinity_outro_text,
@@ -201,6 +213,10 @@ def run(cfg: AppConfig) -> None:
             f"strides(h/f/p/s)={resolved_mp_hand_stride}/{resolved_mp_face_stride}/{resolved_mp_pose_stride}/{resolved_mp_seg_stride} "
             f"yolo_stride={resolved_yolo_stride} yolo_device={resolved_yolo_device} yolo_half={resolved_yolo_half}"
         )
+    if cfg.badge_scan_first:
+        import time as _time
+        engine.state.phase = BADGE_SCAN
+        engine.state.phase_entered_at = _time.monotonic()
 
     try:
         if not cfg.disable_yolo:
@@ -277,6 +293,10 @@ def run(cfg: AppConfig) -> None:
 
         frame = cv2.flip(frame, 1)
         rain = MatrixRain(frame.shape[1], frame.shape[0])
+
+        qr_detector = cv2.QRCodeDetector()
+        _qr_last_result: str | None = None
+        _qr_last_at: float = 0.0
 
         frame_idx = 0
         last_tick = time.perf_counter()
@@ -634,7 +654,7 @@ def run(cfg: AppConfig) -> None:
             # le rejeu bullet-time qui rejoue des frames passees non segmentees).
             white_rain = event.celebration_key == "white_rabbit"
             matrix_scene = (
-                event.phase not in (INTRO, BLUE_ENDING, TRINITY_OUTRO)
+                event.phase not in (INTRO, BLUE_ENDING, BADGE_SCAN, TRINITY_OUTRO)
                 and replay_frame is None
             )
             mask = None
@@ -726,6 +746,29 @@ def run(cfg: AppConfig) -> None:
                 draw_blue_ending(display, event)
                 persons = faces = poses = 0
 
+            elif event.phase == BADGE_SCAN:
+                # Scan badge : camera brute, pas de pluie Matrix, juste l'overlay
+                # de scan afin que le QR du badge soit lisible par le detecteur.
+                display = frame
+                # pyzbar est plus robuste que cv2.QRCodeDetector pour les badges
+                # imprimes (angles, petits codes, logos inclus dans le QR).
+                if _PYZBAR_AVAILABLE:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    # CLAHE : ameliore le contraste local pour les QR imprimes
+                    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                    gray = clahe.apply(gray)
+                    objs = _pyzbar_decode(gray)  # type: ignore[call-arg]
+                    qr_data = objs[0].data.decode("utf-8", errors="replace") if objs else ""
+                else:
+                    qr_data, _, _ = qr_detector.detectAndDecode(frame)
+                if qr_data:
+                    _qr_last_result = qr_data
+                    _qr_last_at = now
+                draw_badge_scan_screen(
+                    display, event, _qr_last_result, _qr_last_at
+                )
+                persons = faces = poses = 0
+
             elif replay_frame is not None:
                 # Pendant le rejeu : pas d'overlays de detection ni d'ecran de
                 # round, juste l'effet bullet-time sur les frames du passe.
@@ -804,8 +847,7 @@ def run(cfg: AppConfig) -> None:
                 elif event.phase == SCORE:
                     draw_score_screen(display, event)
 
-            if event.phase not in (INTRO, BLUE_ENDING, TRINITY_OUTRO):
-                draw_celebration(display, event)
+            if event.phase not in (INTRO, BLUE_ENDING, BADGE_SCAN, TRINITY_OUTRO):
                 # Si le masque a deja place la pluie en fond, ne pas la
                 # redessiner par-dessus (sinon on noie la personne).
                 if mask is None:
@@ -842,7 +884,7 @@ def run(cfg: AppConfig) -> None:
                     print(f"[BENCH] starting run {bench_current_run}/{bench_target_runs}")
                     reset_bench_run(tick)
 
-            if event.phase not in (INTRO, BLUE_ENDING, TRINITY_OUTRO):
+            if event.phase not in (INTRO, BLUE_ENDING, BADGE_SCAN, TRINITY_OUTRO):
                 draw_hud(
                     display,
                     fps=fps,
@@ -851,6 +893,10 @@ def run(cfg: AppConfig) -> None:
                     poses=poses,
                     event=event,
                 )
+
+            if event.phase in (ATTRACT, INTRO):
+                _qr_last_result = None
+                _qr_last_at = 0.0
 
             cv2.imshow(cfg.window_name, display)
             key = cv2.waitKey(1) & 0xFF

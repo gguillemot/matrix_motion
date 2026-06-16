@@ -49,6 +49,7 @@ BLUE_ENDING = "BLUE_ENDING"
 COUNTDOWN = "COUNTDOWN"
 IN_ROUND = "IN_ROUND"
 SCORE = "SCORE"
+BADGE_SCAN = "BADGE_SCAN"
 TRINITY_OUTRO = "TRINITY_OUTRO"
 
 # Outro "Trinity" : l'ecran de score reste visible SCORE_HOLD_SEC APRES la fin de
@@ -57,6 +58,7 @@ TRINITY_OUTRO = "TRINITY_OUTRO"
 # score). Ensuite on enchaine sur le clip Trinity (gele + texte) pour
 # TRINITY_OUTRO_DURATION avant le retour auto a l'attract (ESPACE court-circuite).
 SCORE_HOLD_SEC = 3.0
+BADGE_SCAN_SEC = 30.0  # durée de l'écran de scan badge entre le score et l'outro
 TRINITY_OUTRO_DURATION = (
     TRINITY_VIDEO_END - TRINITY_VIDEO_START
 ) + TRINITY_FREEZE_HOLD_SEC
@@ -154,6 +156,7 @@ class GameEvent:
     best_score: int = 0
     new_record: bool = False
     round_results: list[RoundResult] = field(default_factory=list)
+    badge_scan_time_left: float = 0.0
     published: bool = False
     # -- Quiz Matrix (defi QCM) --------------------------------------------
     quiz_active: bool = False
@@ -295,13 +298,21 @@ class GameEngine:
             return self._snapshot()
 
         if state.phase == SCORE:
-            # Rejouer reste possible pendant tout l'affichage des scores. L'outro
-            # ne demarre que SCORE_HOLD_SEC apres la fin de la celebration de la
-            # derniere figure (celebration_until), pour garantir un ecran de score
-            # propre et visible meme apres une figure a longue celebration.
+            # Rejouer reste possible pendant tout l'affichage des scores. L'ecran
+            # badge_scan ne demarre que SCORE_HOLD_SEC apres la fin de la celebration.
             self._update_start_hold(hands, now)
             score_visible_since = max(state.phase_entered_at, state.celebration_until)
             if state.phase == SCORE and now - score_visible_since >= SCORE_HOLD_SEC:
+                state.phase = BADGE_SCAN
+                state.phase_entered_at = now
+                state.start_hold_since = None
+            return self._snapshot()
+
+        if state.phase == BADGE_SCAN:
+            # Écran intermédiaire : les participants scannent leur badge.
+            # Rejouer reste possible (2 paumes) ; après BADGE_SCAN_SEC on passe à l'outro.
+            self._update_start_hold(hands, now)
+            if now - state.phase_entered_at >= BADGE_SCAN_SEC:
                 state.phase = TRINITY_OUTRO
                 state.phase_entered_at = now
                 state.start_hold_since = None
@@ -677,6 +688,11 @@ class GameEngine:
             best_score=self.best_score,
             new_record=state.new_record,
             round_results=list(state.round_results),
+            badge_scan_time_left=(
+                max(0.0, BADGE_SCAN_SEC - (now - state.phase_entered_at))
+                if state.phase == BADGE_SCAN
+                else 0.0
+            ),
             published=published,
             quiz_active=quiz_active,
             quiz_substate=quiz_substate,

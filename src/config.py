@@ -162,6 +162,7 @@ class AppConfig:
     intro_end: float
     benchmark_seconds: float
     benchmark_runs: int
+    badge_scan_first: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -298,6 +299,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="number of benchmark runs to execute (used with --benchmark-seconds)",
     )
+    parser.add_argument(
+        "--badge-scan-first",
+        action="store_true",
+        help="demarre directement sur l'ecran de scan de badge (test)",
+    )
     return parser
 
 
@@ -341,4 +347,5 @@ def parse_args(argv: Sequence[str] | None = None) -> AppConfig:
         intro_end=args.intro_end,
         benchmark_seconds=max(0.0, args.benchmark_seconds),
         benchmark_runs=max(1, args.benchmark_runs),
+        badge_scan_first=args.badge_scan_first,
     )
