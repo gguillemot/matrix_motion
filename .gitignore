@@ -7,4 +7,3 @@ pose_landmarker_lite.task
 face_detector.tflite
 selfie_segmenter.tflite
 highscore.json
-assets/*.mp4
