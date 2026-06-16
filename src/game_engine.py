@@ -10,6 +10,14 @@ from typing import Callable, Sequence
 from src.config import (
     BULLET_STOP_VIDEO_SEC,
     BULLET_TIME_REPLAY_SEC,
+    QUIZ_DWELL_SEC,
+    QUIZ_ENABLED,
+    QUIZ_GRACE_SEC,
+    QUIZ_INTRO_SEC,
+    QUIZ_MAX_PER_GAME,
+    QUIZ_QUESTIONS_PATH,
+    QUIZ_REVEAL_SEC,
+    QUIZ_ZONE_MARGIN,
     TRINITY_FREEZE_HOLD_SEC,
     TRINITY_VIDEO_END,
     TRINITY_VIDEO_START,
@@ -24,11 +32,13 @@ from src.challenges import (
     HandObservation,
     HoldTracker,
     PoseObservation,
+    QuizRuntime,
     SpoonTracker,
     build_breizhcamp_campaign,
     bullet_stop_palm,
     bunny_ears_active,
     dodge_matches,
+    load_quiz_questions,
     pill_hover,
 )
 
@@ -145,6 +155,21 @@ class GameEvent:
     new_record: bool = False
     round_results: list[RoundResult] = field(default_factory=list)
     published: bool = False
+    # -- Quiz Matrix (defi QCM) --------------------------------------------
+    quiz_active: bool = False
+    quiz_substate: str = ""
+    quiz_question: str = ""
+    quiz_answers: list[str] = field(default_factory=list)
+    quiz_zones: list[tuple[float, float, float, float]] = field(default_factory=list)
+    quiz_cursor: tuple[float, float] | None = None
+    quiz_dwell: list[float] = field(default_factory=list)
+    quiz_selected_index: int | None = None
+    quiz_correct_index: int = -1
+    quiz_result: str = ""
+    quiz_explanation: str = ""
+    quiz_timer_left: float = 0.0
+    quiz_timer_total: float = 0.0
+    quiz_hand_detected: bool = False
 
 
 class GameEngine:
@@ -177,8 +202,11 @@ class GameEngine:
         self.victory_pill = victory_pill
         self._rng = rng or random.Random()
         self._fixed_campaign = campaign
+        self._quiz_questions = (
+            load_quiz_questions(QUIZ_QUESTIONS_PATH) if QUIZ_ENABLED else []
+        )
         self.challenges: list[Challenge] = (
-            list(campaign) if campaign else build_breizhcamp_campaign(self._rng)
+            list(campaign) if campaign else self._build_campaign()
         )
         self._best_score_path = Path(best_score_path) if best_score_path else None
         self.best_score = self._load_best_score()
@@ -188,10 +216,19 @@ class GameEngine:
         self._dodge_hold = HoldTracker(DODGE_HOLD_SEC)
         self._spoon = SpoonTracker()
         self._bullet_stop = HoldTracker(BULLET_STOP_HOLD_SEC)
+        self._quiz: QuizRuntime | None = None
         self._palm_anchor: tuple[float, float] | None = None
         self._figure_progress = 0.0
         self._pill_hover: str | None = None
         self._now = 0.0
+
+    def _build_campaign(self) -> list[Challenge]:
+        """Campagne par defaut : figures + quiz intercales (alternance stricte)."""
+        return build_breizhcamp_campaign(
+            self._rng,
+            quiz_questions=self._quiz_questions or None,
+            max_quiz=QUIZ_MAX_PER_GAME,
+        )
 
     def current_challenge(self) -> Challenge | None:
         if 0 <= self.state.round_index < len(self.challenges):
@@ -200,7 +237,7 @@ class GameEngine:
 
     def start_game(self, now: float) -> None:
         if self._fixed_campaign is None:
-            self.challenges = build_breizhcamp_campaign(self._rng)
+            self.challenges = self._build_campaign()
         state = self.state
         state.phase = INTRO if self.has_intro else PILL_CHOICE
         state.phase_entered_at = now
@@ -322,6 +359,10 @@ class GameEngine:
         if now < state.round_transition_at:
             return self._snapshot()
 
+        # Defi quiz : machine a etats interne (INTRO/ACTIVE/REVEAL), timer propre.
+        if challenge.kind == "quiz":
+            return self._update_quiz(challenge, hands, now)
+
         if now >= state.round_deadline:
             state.round_results.append(RoundResult(challenge.title, False, 0))
             state.combo = 0  # un echec casse le combo
@@ -381,6 +422,7 @@ class GameEngine:
         self._dodge_hold.reset()
         self._spoon.reset()
         self._bullet_stop.reset()
+        self._quiz = None
         self._palm_anchor = None
         self._figure_progress = 0.0
         self._pill_hover = None
@@ -434,6 +476,62 @@ class GameEngine:
             return validated is not None, message
 
         return False, message
+
+    def _update_quiz(
+        self,
+        challenge: Challenge,
+        hands: Sequence[HandObservation],
+        now: float,
+    ) -> GameEvent:
+        """Pilote un defi quiz via QuizRuntime (cree paresseusement au 1er frame
+        actif du round). Encaisse les points et avance quand la question est
+        terminee (apres l'ecran REVEAL)."""
+        if self._quiz is None:
+            question = challenge.quiz_question
+            if question is None:  # garde-fou : quiz sans question -> on saute
+                self._advance(now, READY_SEC)
+                return self._snapshot()
+            self._quiz = QuizRuntime(
+                question,
+                duration_s=challenge.duration_sec,
+                intro_sec=QUIZ_INTRO_SEC,
+                reveal_sec=QUIZ_REVEAL_SEC,
+                dwell_sec=QUIZ_DWELL_SEC,
+                grace_sec=QUIZ_GRACE_SEC,
+                zone_margin=QUIZ_ZONE_MARGIN,
+            )
+
+        quiz = self._quiz
+        quiz.update(hands, now)
+        self._figure_progress = max(quiz.dwell) if quiz.dwell else 0.0
+
+        if quiz.finished:
+            self._finish_quiz(challenge, quiz, now)
+
+        return self._snapshot()
+
+    def _finish_quiz(self, challenge: Challenge, quiz: QuizRuntime, now: float) -> None:
+        state = self.state
+        if quiz.result == "correct":
+            state.combo = min(MAX_COMBO, state.combo + 1)
+            points = (
+                BASE_POINTS + int(MAX_SPEED_BONUS * quiz.timer_ratio)
+            ) * state.combo
+            state.score += points
+            state.round_results.append(RoundResult(challenge.title, True, points))
+            message = "BONNE REPONSE"
+            if state.combo > 1:
+                message = f"{message}  COMBO x{state.combo}"
+            self._set_flash(message, now)
+        else:
+            # Mauvaise reponse OU timeout : 0 point, le combo casse.
+            state.combo = 0
+            state.round_results.append(RoundResult(challenge.title, False, 0))
+            self._set_flash(
+                "MAUVAISE REPONSE" if quiz.result == "incorrect" else TIMEOUT_MESSAGE,
+                now,
+            )
+        self._advance(now, READY_SEC)
 
     def _advance(self, now: float, transition: float = ROUND_TRANSITION_SEC) -> None:
         state = self.state
@@ -517,6 +615,37 @@ class GameEngine:
                 1.0, max(0.0, (now - state.celebration_started_at) / window)
             )
 
+        quiz = self._quiz if state.phase == IN_ROUND else None
+        quiz_active = quiz is not None and not quiz.finished
+        if quiz is not None:
+            quiz_substate = quiz.substate
+            quiz_question = quiz.question.question
+            quiz_answers = list(quiz.question.answers)
+            quiz_zones = list(quiz.zones)
+            quiz_cursor = quiz.cursor
+            quiz_dwell = list(quiz.dwell)
+            quiz_selected_index = quiz.selected_index
+            quiz_correct_index = quiz.question.correct_index
+            quiz_result = quiz.result
+            quiz_explanation = quiz.question.explanation
+            quiz_timer_left = quiz.timer_left
+            quiz_timer_total = quiz.duration_s
+            quiz_hand_detected = quiz.hand_detected
+        else:
+            quiz_substate = ""
+            quiz_question = ""
+            quiz_answers = []
+            quiz_zones = []
+            quiz_cursor = None
+            quiz_dwell = []
+            quiz_selected_index = None
+            quiz_correct_index = -1
+            quiz_result = ""
+            quiz_explanation = ""
+            quiz_timer_left = 0.0
+            quiz_timer_total = 0.0
+            quiz_hand_detected = False
+
         return GameEvent(
             phase=state.phase,
             score=state.score,
@@ -549,4 +678,18 @@ class GameEngine:
             new_record=state.new_record,
             round_results=list(state.round_results),
             published=published,
+            quiz_active=quiz_active,
+            quiz_substate=quiz_substate,
+            quiz_question=quiz_question,
+            quiz_answers=quiz_answers,
+            quiz_zones=quiz_zones,
+            quiz_cursor=quiz_cursor,
+            quiz_dwell=quiz_dwell,
+            quiz_selected_index=quiz_selected_index,
+            quiz_correct_index=quiz_correct_index,
+            quiz_result=quiz_result,
+            quiz_explanation=quiz_explanation,
+            quiz_timer_left=quiz_timer_left,
+            quiz_timer_total=quiz_timer_total,
+            quiz_hand_detected=quiz_hand_detected,
         )

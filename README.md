@@ -15,7 +15,7 @@ State machine :
 ```
 ATTRACT --2 paumes 1s--> INTRO (clip video, si present) --> PILL_CHOICE
 PILL_CHOICE --pilule bleue--> BLUE_ENDING (camera normale, sans effet) --2 paumes--> nouvelle partie
-PILL_CHOICE --pilule rouge--> COUNTDOWN (3, 2, 1) --> IN_ROUND (4 epreuves, ordre aleatoire) --> SCORE
+PILL_CHOICE --pilule rouge--> COUNTDOWN (3, 2, 1) --> IN_ROUND (4 epreuves + quiz QCM intercalaires) --> SCORE
 SCORE -->= 3s apres la celebration finale--> TRINITY_OUTRO (clip 1:41->1:44 gele + texte + QR) --ESPACE / ~10s--> ATTRACT
 ```
 
@@ -46,7 +46,22 @@ Chaque figure reussie declenche un **effet de recompense** : bullet-time avec re
 
 Le passage d'une figure a la suivante se fait en deux temps, sans chevauchement : (1) la celebration joue **seule** (3 s pour les figures standard, 4.5 s de replay bullet-time pour le dodge, 10 s de clip pour Stop The Bullets), puis (2) un ecran **"PREPARE-TOI"** annonce la figure suivante (titre + consigne) pendant 2 s, chrono fige, avant que la detection ne demarre. De quoi profiter de la celebration et comprendre l'epreuve a venir.
 
-Les 5 figures (seuils geometriques documentes dans `src/challenges.py`) :
+### Quiz Matrix (QCM)
+
+La campagne pilule rouge peut maintenant intercaler des mini-challenges **QCM Matrix** entre les figures physiques.
+
+- Chaque quiz affiche une question + 2 a 4 reponses (zones A/B/C/D).
+- La selection se fait en pointant avec l'index (landmark 8 MediaPipe) et en tenant le curseur dans une zone pendant ~1.2 s (dwell).
+- Une courte phase d'intro precede la question, puis une phase de reveal affiche la bonne reponse et l'explication.
+- Si le temps expire, le quiz est marque *timeout* et la partie continue.
+
+Scoring quiz : meme formule que les figures (base + bonus vitesse, puis multiplicateur combo). Une bonne reponse conserve/augmente le combo, une mauvaise reponse (ou timeout) casse le combo.
+
+Reglages quiz (dans `src/config.py`) : `QUIZ_ENABLED`, `QUIZ_MAX_PER_GAME`, `QUIZ_DEFAULT_DURATION_S`, `QUIZ_DWELL_SEC`, `QUIZ_INTRO_SEC`, `QUIZ_REVEAL_SEC`, `QUIZ_GRACE_SEC`, `QUIZ_ZONE_MARGIN`.
+
+Banque de questions : `assets/quiz/questions.json` (fallback integre si fichier manquant ou invalide).
+
+Les 5 figures physiques (seuils geometriques documentes dans `src/challenges.py`) :
 
 | Figure | Action joueur | Detection |
 |---|---|---|

@@ -54,6 +54,7 @@ from src.rendering import (
     draw_intro_hint,
     draw_pill_choice,
     draw_pose_skeleton,
+    draw_quiz,
     draw_ready_card,
     draw_round_overlay,
     draw_bullet_stop,
@@ -62,6 +63,7 @@ from src.rendering import (
     draw_spoon,
     draw_trinity_outro_text,
     draw_yolo_detections,
+    fit_to_window,
 )
 from src.tracking import (
     PersonMaskTracker,
@@ -568,6 +570,8 @@ def run(cfg: AppConfig) -> None:
                         draw_ready_card(
                             display, event
                         )  # ecran "prepare-toi" avant la figure
+                    elif event.challenge_kind == "quiz":
+                        draw_quiz(display, event)
                     else:
                         draw_round_overlay(display, event)
                         if event.challenge_kind == "spoon":
@@ -602,7 +606,7 @@ def run(cfg: AppConfig) -> None:
                     event=event,
                 )
 
-            cv2.imshow(cfg.window_name, display)
+            cv2.imshow(cfg.window_name, fit_to_window(display, cfg.window_name))
             key = cv2.waitKey(1) & 0xFF
 
             if key in (ord("q"), 27):

@@ -7,6 +7,16 @@ from typing import Sequence
 
 import numpy as np
 
+import json
+import logging
+from pathlib import Path
+
+from src.config import (
+    QUIZ_DEFAULT_DURATION_S,
+    QUIZ_MAX_ANSWERS,
+    QUIZ_QUESTIONS_PATH,
+)
+
 HAND_CONNECTIONS = [
     (0, 1), (1, 2), (2, 3), (3, 4),
     (0, 5), (5, 6), (6, 7), (7, 8),
@@ -71,6 +81,10 @@ class HandObservation:
     palm_y: float
     is_pinch: bool
     hand_angle: float  # radians, vecteur poignet -> base du majeur
+    # Bout de l'index (landmark 8), normalise 0..1 : sert de curseur de pointage
+    # pour le quiz. Valeur par defaut = centre (compat ascendante des tests).
+    index_x: float = 0.5
+    index_y: float = 0.5
 
 
 @dataclass(slots=True)
@@ -99,6 +113,310 @@ class Challenge:
     background_asset: str = ""
     victory_pill: str = "blue"
     success_message: str = ""
+    # Question portee par un defi de type "quiz" (None pour les figures geste).
+    quiz_question: "QuizQuestion | None" = None
+
+
+# ---------------------------------------------------------------------------
+# Quiz Matrix : banque de questions + machine a etats du defi QCM
+# ---------------------------------------------------------------------------
+
+# Sous-etats d'un defi quiz, pilotes par QuizRuntime :
+#  INTRO  : la question s'affiche, chrono fige (le temps de lire) ;
+#  ACTIVE : le chrono decompte, le joueur pointe + maintient sa reponse ;
+#  REVEAL : bonne/mauvaise reponse revelee + explication ;
+#  DONE   : termine, le moteur encaisse les points et passe au defi suivant.
+QUIZ_INTRO = "intro"
+QUIZ_ACTIVE = "active"
+QUIZ_REVEAL = "reveal"
+QUIZ_DONE = "done"
+
+# Ordre de difficulte pour la progression croissante des questions.
+QUIZ_DIFFICULTY_RANK = {"easy": 0, "medium": 1, "hard": 2}
+
+
+@dataclass(slots=True)
+class QuizQuestion:
+    id: str
+    question: str
+    answers: list[str]
+    correct_index: int
+    difficulty: str = "medium"
+    duration_s: float | None = None
+    explanation: str = ""
+
+
+# Fallback integre : si la banque JSON manque ou est invalide, le jeu ne doit
+# JAMAIS crasher sur le stand. Quelques questions de secours suffisent.
+_FALLBACK_QUIZ_QUESTIONS: list[QuizQuestion] = [
+    QuizQuestion(
+        id="fallback_pill",
+        question="Quelle pilule fait decouvrir la verite a Neo ?",
+        answers=["La rouge", "La bleue"],
+        correct_index=0,
+        difficulty="easy",
+        explanation="La pilule rouge revele la realite de la Matrice.",
+    ),
+    QuizQuestion(
+        id="fallback_neo",
+        question="Comment s'appelle l'Elu ?",
+        answers=["Morpheus", "Neo", "Cypher", "Smith"],
+        correct_index=1,
+        difficulty="easy",
+        explanation="Neo est l'anagramme de One (l'Elu).",
+    ),
+    QuizQuestion(
+        id="fallback_spoon",
+        question="Que dit l'enfant a propos de la cuillere ?",
+        answers=["Il n'y a pas de cuillere", "La cuillere est tordue"],
+        correct_index=0,
+        difficulty="medium",
+        explanation="\"There is no spoon\" : c'est toi qui plies, pas la cuillere.",
+    ),
+]
+
+
+def quiz_answer_zones(
+    answer_count: int, max_answers: int = QUIZ_MAX_ANSWERS
+) -> list[tuple[float, float, float, float]]:
+    """Rectangles normalises (x0, y0, x1, y1) des cartes de reponses.
+
+    2 reponses -> 1 ligne de 2 cartes ; 3-4 reponses -> grille 2x2. Les cartes
+    sont volontairement BASSES et PEU HAUTES, ancrees au bas de l'ecran : tout
+    le haut/milieu reste disponible pour la question, qui doit rester visible
+    meme en 720p ou en plein ecran (ratio quelconque)."""
+    n = max(1, min(max_answers, answer_count))
+    area_x0, area_x1 = 0.06, 0.94
+    bottom = 0.94  # bas des cartes
+    gap = 0.025
+    cell_h = 0.15  # hauteur fixe et compacte d'une carte
+    cols = 1 if n == 1 else 2
+    rows = math.ceil(n / cols)
+    cell_w = (area_x1 - area_x0 - gap * (cols - 1)) / cols
+    total_h = cell_h * rows + gap * (rows - 1)
+    area_y0 = bottom - total_h  # ancre la grille au bas de l'ecran
+    zones: list[tuple[float, float, float, float]] = []
+    for i in range(n):
+        r, c = divmod(i, cols)
+        x0 = area_x0 + c * (cell_w + gap)
+        y0 = area_y0 + r * (cell_h + gap)
+        zones.append((x0, y0, x0 + cell_w, y0 + cell_h))
+    return zones
+
+
+def _validate_quiz_question(raw: object) -> QuizQuestion | None:
+    """Valide une entree brute (dict JSON). Retourne None si incoherente."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        qid = str(raw["id"])
+        text = str(raw["question"])
+        answers = [str(a) for a in raw["answers"]]
+        correct = int(raw["correct_index"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (2 <= len(answers) <= QUIZ_MAX_ANSWERS):
+        return None
+    if not (0 <= correct < len(answers)):
+        return None
+    difficulty = str(raw.get("difficulty", "medium")).lower()
+    if difficulty not in QUIZ_DIFFICULTY_RANK:
+        difficulty = "medium"
+    raw_duration = raw.get("duration_s")
+    duration = (
+        float(raw_duration)
+        if isinstance(raw_duration, (int, float)) and raw_duration > 0
+        else None
+    )
+    explanation = str(raw.get("explanation", "") or "")
+    return QuizQuestion(
+        id=qid,
+        question=text,
+        answers=answers,
+        correct_index=correct,
+        difficulty=difficulty,
+        duration_s=duration,
+        explanation=explanation,
+    )
+
+
+def load_quiz_questions(path: str | Path | None = None) -> list[QuizQuestion]:
+    """Charge la banque de questions de maniere tolerante.
+
+    JSON attendu : {"questions": [...]} ou directement une liste. Toute entree
+    invalide est ignoree. Si le fichier manque/est illisible ou ne contient
+    aucune question valide, on retombe sur le fallback integre (+ avertissement),
+    pour que le jeu ne crashe jamais sur le stand."""
+    target = Path(path) if path is not None else QUIZ_QUESTIONS_PATH
+    questions: list[QuizQuestion] = []
+    try:
+        raw = json.loads(Path(target).read_text(encoding="utf-8"))
+        items = raw["questions"] if isinstance(raw, dict) else raw
+        if not isinstance(items, list):
+            raise ValueError("le JSON ne contient pas de liste de questions")
+        questions = [
+            q for q in (_validate_quiz_question(item) for item in items) if q is not None
+        ]
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        logging.warning(
+            "[QUIZ] chargement de %s impossible (%s) : fallback integre", target, exc
+        )
+        questions = []
+    if not questions:
+        logging.warning(
+            "[QUIZ] aucune question valide trouvee, utilisation du fallback integre"
+        )
+        questions = [replace(q) for q in _FALLBACK_QUIZ_QUESTIONS]
+    return questions
+
+
+def select_quiz_questions(
+    questions: Sequence[QuizQuestion],
+    count: int,
+    rng: random.Random | None = None,
+    shuffle: bool = True,
+) -> list[QuizQuestion]:
+    """Selectionne `count` questions distinctes, en difficulte croissante."""
+    if not questions or count <= 0:
+        return []
+    pool = list(questions)
+    if shuffle:
+        (rng or random).shuffle(pool)
+    # Tri stable par difficulte : ramp easy -> medium -> hard, ordre aleatoire
+    # conserve a difficulte egale.
+    pool.sort(key=lambda q: QUIZ_DIFFICULTY_RANK.get(q.difficulty, 1))
+    return pool[:count]
+
+
+def make_quiz_challenge(question: QuizQuestion) -> Challenge:
+    """Construit un defi de type quiz a partir d'une question."""
+    return Challenge(
+        key=f"quiz_{question.id}",
+        title="Matrix Quiz",
+        prompt="Pointe ta reponse et maintiens",
+        kind="quiz",
+        duration_sec=question.duration_s or QUIZ_DEFAULT_DURATION_S,
+        quiz_question=question,
+    )
+
+
+class QuizRuntime:
+    """Machine a etats d'une question : INTRO -> ACTIVE -> REVEAL -> DONE.
+
+    `update(hands, now)` fait avancer l'etat ; les attributs publics (substate,
+    cursor, dwell, timer_left, selected_index, result...) sont lus par le rendu
+    et par le moteur (scoring a la fin)."""
+
+    def __init__(
+        self,
+        question: QuizQuestion,
+        *,
+        duration_s: float,
+        intro_sec: float,
+        reveal_sec: float,
+        dwell_sec: float,
+        grace_sec: float,
+        zone_margin: float,
+    ) -> None:
+        self.question = question
+        self.duration_s = duration_s
+        self.intro_sec = intro_sec
+        self.reveal_sec = reveal_sec
+        self.dwell_sec = dwell_sec
+        self.grace_sec = grace_sec
+        self.zone_margin = zone_margin
+        self.zones = quiz_answer_zones(len(question.answers))
+
+        self.substate = QUIZ_INTRO
+        self.created_at: float | None = None
+        self.active_at: float | None = None
+        self.reveal_at: float | None = None
+        self.selected_index: int | None = None
+        self.result: str = ""  # "correct" / "incorrect" / "timeout"
+        self.timer_left = duration_s
+        self.timer_ratio = 0.0  # temps restant (0..1) au verrouillage, pour le bonus
+        self.cursor: tuple[float, float] | None = None
+        self.hand_detected = False
+        self.dwell = [0.0] * len(question.answers)
+        self._dwell_zone: int | None = None
+        self._dwell_since: float | None = None
+
+    @property
+    def finished(self) -> bool:
+        return self.substate == QUIZ_DONE
+
+    def update(self, hands: Sequence[HandObservation], now: float) -> None:
+        if self.created_at is None:
+            self.created_at = now
+
+        # Curseur = bout de l'index de la premiere main detectee (image miroir :
+        # les coordonnees correspondent deja a ce que voit le joueur).
+        self.hand_detected = bool(hands)
+        self.cursor = (hands[0].index_x, hands[0].index_y) if hands else None
+
+        if self.substate == QUIZ_INTRO:
+            self.timer_left = self.duration_s
+            if now - self.created_at >= self.intro_sec:
+                self.substate = QUIZ_ACTIVE
+                self.active_at = now
+            return
+
+        if self.substate == QUIZ_ACTIVE:
+            elapsed = now - (self.active_at or now)
+            self.timer_left = max(0.0, self.duration_s - elapsed)
+            # Grace : on ignore le pointage le temps que la main arrive.
+            zone_idx = None
+            if elapsed >= self.grace_sec and self.cursor is not None:
+                zone_idx = self._zone_at(self.cursor)
+            self._update_dwell(zone_idx, now)
+            if zone_idx is not None and self.dwell[zone_idx] >= 1.0:
+                self._lock(zone_idx, now)
+                return
+            if self.timer_left <= 0.0:
+                self._lock(None, now)  # timeout : aucune reponse
+            return
+
+        if self.substate == QUIZ_REVEAL:
+            if now - (self.reveal_at or now) >= self.reveal_sec:
+                self.substate = QUIZ_DONE
+            return
+
+    def _zone_at(self, point: tuple[float, float]) -> int | None:
+        x, y = point
+        for i, (x0, y0, x1, y1) in enumerate(self.zones):
+            mx = (x1 - x0) * self.zone_margin
+            my = (y1 - y0) * self.zone_margin
+            if x0 + mx <= x <= x1 - mx and y0 + my <= y <= y1 - my:
+                return i
+        return None
+
+    def _update_dwell(self, zone_idx: int | None, now: float) -> None:
+        if zone_idx != self._dwell_zone:
+            # Changement de zone (ou main sortie) : la jauge repart de zero.
+            self._dwell_zone = zone_idx
+            self._dwell_since = now
+            self.dwell = [0.0] * len(self.dwell)
+        if zone_idx is None or self._dwell_since is None:
+            return
+        if self.dwell_sec <= 0:
+            self.dwell[zone_idx] = 1.0
+            return
+        progress = (now - self._dwell_since) / self.dwell_sec
+        self.dwell[zone_idx] = min(1.0, max(0.0, progress))
+
+    def _lock(self, idx: int | None, now: float) -> None:
+        self.selected_index = idx
+        if idx is None:
+            self.result = "timeout"
+            self.timer_ratio = 0.0
+        elif idx == self.question.correct_index:
+            self.result = "correct"
+            self.timer_ratio = max(0.0, self.timer_left / self.duration_s)
+        else:
+            self.result = "incorrect"
+            self.timer_ratio = 0.0
+        self.substate = QUIZ_REVEAL
+        self.reveal_at = now
 
 
 # ---------------------------------------------------------------------------
@@ -145,14 +463,36 @@ _BREIZHCAMP_FIGURES: list[Challenge] = [
 ]
 
 
-def build_breizhcamp_campaign(rng: random.Random | None = None, shuffle: bool = True) -> list[Challenge]:
+def build_breizhcamp_campaign(
+    rng: random.Random | None = None,
+    shuffle: bool = True,
+    quiz_questions: Sequence[QuizQuestion] | None = None,
+    max_quiz: int | None = None,
+) -> list[Challenge]:
     """Campagne d'une partie : les 4 epreuves de la pilule rouge, en ordre
     aleatoire par defaut. Le choix des pilules est une phase a part, jouee
-    avant la campagne (voir GameEngine)."""
+    avant la campagne (voir GameEngine).
+
+    Si `quiz_questions` est fourni, on intercale STRICTEMENT un defi quiz apres
+    chaque figure (figure, quiz, figure, quiz...), dans la limite de `max_quiz`
+    et du nombre de questions disponibles. Sinon, comportement historique
+    (figures seules) : les tests existants restent valides."""
     campaign = [replace(challenge) for challenge in _BREIZHCAMP_FIGURES]
     if shuffle:
         (rng or random).shuffle(campaign)
-    return campaign
+    if not quiz_questions:
+        return campaign
+
+    quota = len(campaign) if max_quiz is None else min(max_quiz, len(campaign))
+    selected = select_quiz_questions(quiz_questions, quota, rng, shuffle)
+    interleaved: list[Challenge] = []
+    qi = 0
+    for figure in campaign:
+        interleaved.append(figure)
+        if qi < len(selected):
+            interleaved.append(make_quiz_challenge(selected[qi]))
+            qi += 1
+    return interleaved
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +691,8 @@ def observe_hands(hand_results) -> list[HandObservation]:
                     palm_y=palm_y,
                     is_pinch=is_pinch,
                     hand_angle=hand_angle,
+                    index_x=float(index_tip.x),
+                    index_y=float(index_tip.y),
                 )
             )
 

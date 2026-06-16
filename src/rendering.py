@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from src.challenges import HAND_CONNECTIONS, PILL_ZONES
+from src.challenges import HAND_CONNECTIONS, PILL_ZONES, QUIZ_ACTIVE, QUIZ_REVEAL
 from src.config import FOREGROUND_GREEN_TINT, PROJECT_ROOT, RAIN_BACKGROUND_COLOR
 from src.game_engine import GameEvent
 
@@ -362,6 +362,47 @@ def draw_outro_qr(frame: np.ndarray) -> None:
 
 def _blink(period: float = 0.8) -> bool:
     return int(time.monotonic() / period) % 2 == 0
+
+
+def fit_to_window(frame: np.ndarray, window_name: str) -> np.ndarray:
+    """Adapte `frame` a la taille reelle de la fenetre en PRESERVANT le ratio
+    (letterbox / pillarbox avec bandes noires).
+
+    En plein ecran, OpenCV etire sinon l'image 16:9 pour remplir un ecran de
+    ratio different : la question et les cartes du quiz se retrouvent deformees.
+    Ici on redimensionne au plus grand format qui tient dans la fenetre sans
+    deformation, puis on centre sur un canvas noir a la taille de la fenetre.
+
+    Le pointage n'est pas affecte : il travaille en coordonnees normalisees de
+    la camera, independantes de l'affichage."""
+    if not hasattr(cv2, "getWindowImageRect"):
+        return frame
+    try:
+        rect = cv2.getWindowImageRect(window_name)
+    except cv2.error:
+        return frame
+    win_w, win_h = int(rect[2]), int(rect[3])
+    if win_w <= 0 or win_h <= 0:
+        return frame  # fenetre minimisee / taille indisponible
+
+    h, w = frame.shape[:2]
+    if w <= 0 or h <= 0:
+        return frame
+    # Deja a la bonne taille : rien a faire (cas fenetre = image native).
+    if (win_w, win_h) == (w, h):
+        return frame
+
+    scale = min(win_w / w, win_h / h)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    resized = cv2.resize(frame, (new_w, new_h), interpolation=interp)
+
+    canvas = np.zeros((win_h, win_w, 3), dtype=frame.dtype)
+    x0 = (win_w - new_w) // 2
+    y0 = (win_h - new_h) // 2
+    canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
+    return canvas
 
 
 def _draw_progress_bar(
@@ -946,6 +987,235 @@ def apply_vignette(frame: np.ndarray, strength: float) -> None:
     mask = _vignette_mask(*frame.shape[:2])
     scale = 1.0 - strength * (1.0 - mask)
     frame[:] = (frame * scale).astype(np.uint8)
+
+
+# ---------------------------------------------------------------------------
+# Quiz Matrix : ecran de question (cartes + pointage + reveal)
+# ---------------------------------------------------------------------------
+
+# Couleurs RGB (Pillow) du texte quiz ; le rendu cv2 utilise les constantes BGR.
+_QUIZ_RGB_GREEN = (90, 255, 130)
+_QUIZ_RGB_PALE = (190, 255, 190)
+_QUIZ_RGB_RED = (255, 80, 80)
+_QUIZ_TEXT_OUTLINE = (8, 32, 14)
+_QUIZ_WRONG_BGR = (60, 60, 255)
+_QUIZ_LETTERS = "ABCD"
+
+
+def _draw_quiz_text(
+    frame: np.ndarray, event: GameEvent, reveal: bool, card_top: float
+) -> None:
+    """Question + libelles des reponses + explication/indice, en une seule passe
+    Pillow (gere les accents et limite le cout par frame).
+
+    `card_top` (normalise 0..1) = haut des cartes : la question est centree
+    verticalement dans l'espace AU-DESSUS, pour rester visible quel que soit le
+    nombre de reponses, la resolution ou le ratio d'ecran."""
+    h, w = frame.shape[:2]
+    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(image)
+
+    # Region disponible pour la question : du haut de l'ecran jusqu'au-dessus des
+    # cartes, en reservant une bande (info + barre de temps) juste au-dessus
+    # des cartes.
+    region_top = int(h * 0.045)
+    reserved = int(h * 0.11)  # bande info + timer au-dessus des cartes
+    region_bottom = max(region_top + int(h * 0.10), int(card_top * h) - reserved)
+
+    # Question sur un panneau sombre translucide borde de vert (lisible par-dessus
+    # la camera + la pluie de code). Police bornee pour tenir meme en 720p.
+    q_font = _pil_font(max(22, min(int(h * 0.050), int((region_bottom - region_top) * 0.30))))
+    q_size = int(getattr(q_font, "size", int(h * 0.046)))
+    q_lh = int(q_size * 1.28)
+    q_lines = _wrap_text(draw, event.quiz_question, q_font, int(w * 0.80))
+    text_h = q_lh * len(q_lines)
+    pad_x, pad_y = int(w * 0.030), int(h * 0.022)
+    panel_h = text_h + 2 * pad_y
+    # Centre le panneau verticalement dans la region (descend la question vers le
+    # milieu quand il y a peu de reponses).
+    panel_top = region_top + max(0, ((region_bottom - region_top) - panel_h) // 2)
+    panel_bottom = panel_top + panel_h
+    max_lw = max((draw.textlength(line, font=q_font) for line in q_lines), default=0)
+    panel_w = min(w - 2 * int(w * 0.04), int(max_lw) + 2 * pad_x)
+    panel_x0 = (w - panel_w) // 2
+    panel_x1 = panel_x0 + panel_w
+
+    # Panneau translucide (overlay RGBA composite pour un fond presque opaque).
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    odraw = ImageDraw.Draw(overlay)
+    odraw.rounded_rectangle(
+        [panel_x0, panel_top, panel_x1, panel_bottom],
+        radius=20,
+        fill=(6, 20, 9, 215),
+    )
+    image = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        [panel_x0, panel_top, panel_x1, panel_bottom],
+        radius=20,
+        outline=_QUIZ_RGB_GREEN,
+        width=3,
+    )
+
+    y = panel_top + pad_y
+    for line in q_lines:
+        lw = draw.textlength(line, font=q_font)
+        draw.text(
+            ((w - lw) / 2, y),
+            line,
+            font=q_font,
+            fill=_QUIZ_RGB_GREEN,
+            stroke_width=2,
+            stroke_fill=_QUIZ_TEXT_OUTLINE,
+        )
+        y += q_lh
+
+    # Libelles des reponses, centres dans chaque carte (apres la lettre A/B/C/D).
+    a_font = _pil_font(max(15, int(h * 0.027)))
+    a_lh = int(getattr(a_font, "size", int(h * 0.027)) * 1.2)
+    for i, zone in enumerate(event.quiz_zones):
+        if i >= len(event.quiz_answers):
+            break
+        x0, y0 = int(zone[0] * w), int(zone[1] * h)
+        x1, y1 = int(zone[2] * w), int(zone[3] * h)
+        color = _QUIZ_RGB_PALE
+        if reveal:
+            if i == event.quiz_correct_index:
+                color = _QUIZ_RGB_GREEN
+            elif i == event.quiz_selected_index:
+                color = _QUIZ_RGB_RED
+        text_x0 = x0 + 52
+        lines = _wrap_text(draw, event.quiz_answers[i], a_font, max(40, (x1 - x0) - 68))
+        total = a_lh * len(lines)
+        ty = y0 + ((y1 - y0) - total) // 2
+        for line in lines:
+            draw.text(
+                (text_x0, ty),
+                line,
+                font=a_font,
+                fill=color,
+                stroke_width=2,
+                stroke_fill=_QUIZ_TEXT_OUTLINE,
+            )
+            ty += a_lh
+
+    # Bandeau d'info, juste au-dessus des cartes : explication au reveal, sinon
+    # indice si aucune main n'est detectee.
+    info_text = ""
+    info_color = _QUIZ_RGB_PALE
+    if reveal and event.quiz_explanation:
+        info_text = event.quiz_explanation
+    elif event.quiz_substate == QUIZ_ACTIVE and not event.quiz_hand_detected:
+        info_text = "Leve la main pour pointer"
+    if info_text:
+        i_font = _pil_font(max(15, int(h * 0.026)))
+        i_lh = int(getattr(i_font, "size", int(h * 0.026)) * 1.2)
+        i_lines = _wrap_text(draw, info_text, i_font, int(w * 0.8))
+        # Ancre le bas du bloc juste au-dessus de la barre de temps / des cartes.
+        info_anchor = int(card_top * h) - int(h * 0.055)
+        iy = info_anchor - i_lh * len(i_lines)
+        for line in i_lines:
+            lw = draw.textlength(line, font=i_font)
+            draw.text(
+                ((w - lw) / 2, iy),
+                line,
+                font=i_font,
+                fill=info_color,
+                stroke_width=2,
+                stroke_fill=_QUIZ_TEXT_OUTLINE,
+            )
+            iy += i_lh
+
+    frame[:] = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+
+
+def draw_quiz(frame: np.ndarray, event: GameEvent) -> None:
+    """Ecran de quiz : question (centree dans le haut), cartes de reponses
+    compactes en bas, curseur main + jauge de dwell, barre de temps, reveal."""
+    h, w = frame.shape[:2]
+    _darken(frame, 0.5)
+    reveal = event.quiz_substate == QUIZ_REVEAL
+    active = event.quiz_substate == QUIZ_ACTIVE
+    card_top = min((z[1] for z in event.quiz_zones), default=0.6)
+
+    # Barre de temps, juste au-dessus des cartes : verte, puis orange/rouge < 3 s.
+    if not reveal:
+        total = event.quiz_timer_total if event.quiz_timer_total > 0 else 1.0
+        ratio = max(0.0, min(1.0, event.quiz_timer_left / total))
+        timer_color = MATRIX_GREEN if event.quiz_timer_left > 3.0 else (40, 140, 255)
+        margin = int(w * 0.07)
+        bar_y = int(card_top * h) - int(h * 0.04)
+        _draw_progress_bar(frame, margin, bar_y, w - 2 * margin, 12, ratio, timer_color)
+        cv2.putText(
+            frame,
+            f"{event.quiz_timer_left:0.1f}s",
+            (margin, bar_y - 10),
+            cv2.FONT_HERSHEY_DUPLEX,
+            0.8,
+            timer_color,
+            2,
+            cv2.LINE_AA,
+        )
+
+    # Cartes de reponses (fond + bordure + jauge de dwell).
+    for i, zone in enumerate(event.quiz_zones):
+        x0, y0 = int(zone[0] * w), int(zone[1] * h)
+        x1, y1 = int(zone[2] * w), int(zone[3] * h)
+        dwell = event.quiz_dwell[i] if i < len(event.quiz_dwell) else 0.0
+
+        border = MATRIX_DARK_GREEN
+        thickness = 3
+        if reveal:
+            if i == event.quiz_correct_index:
+                border = MATRIX_GREEN
+                pulse = 0.5 + 0.5 * math.sin(time.monotonic() * 6.0)
+                thickness = 3 + int(4 * pulse)
+            elif i == event.quiz_selected_index:
+                border = _QUIZ_WRONG_BGR
+        elif active and dwell > 0:
+            border = MATRIX_GREEN
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x0, y0), (x1, y1), (12, 28, 12), -1)
+        cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
+        cv2.rectangle(frame, (x0, y0), (x1, y1), border, thickness, cv2.LINE_AA)
+
+        if i < len(_QUIZ_LETTERS):
+            cv2.putText(
+                frame,
+                _QUIZ_LETTERS[i],
+                (x0 + 14, y0 + 38),
+                cv2.FONT_HERSHEY_DUPLEX,
+                1.0,
+                border,
+                2,
+                cv2.LINE_AA,
+            )
+
+        if active and dwell > 0:
+            _draw_progress_bar(
+                frame, x0 + 14, y1 - 16, (x1 - x0) - 28, 7, dwell, MATRIX_GREEN
+            )
+
+    # Textes (question + reponses + info) en une passe Pillow.
+    _draw_quiz_text(frame, event, reveal, card_top)
+
+    # Curseur main facon cible Matrix + anneau de dwell.
+    if event.quiz_cursor is not None and not reveal:
+        cx = int(event.quiz_cursor[0] * w)
+        cy = int(event.quiz_cursor[1] * h)
+        cv2.circle(frame, (cx, cy), 18, MATRIX_GREEN, 2, cv2.LINE_AA)
+        cv2.circle(frame, (cx, cy), 3, MATRIX_GREEN, -1, cv2.LINE_AA)
+        # Petits traits de visee (haut/bas/gauche/droite).
+        cv2.line(frame, (cx - 26, cy), (cx - 20, cy), MATRIX_GREEN, 2)
+        cv2.line(frame, (cx + 20, cy), (cx + 26, cy), MATRIX_GREEN, 2)
+        cv2.line(frame, (cx, cy - 26), (cx, cy - 20), MATRIX_GREEN, 2)
+        cv2.line(frame, (cx, cy + 20), (cx, cy + 26), MATRIX_GREEN, 2)
+        dwell = max(event.quiz_dwell) if event.quiz_dwell else 0.0
+        if dwell > 0:
+            cv2.ellipse(
+                frame, (cx, cy), (24, 24), -90, 0, int(360 * dwell), MATRIX_GREEN, 3, cv2.LINE_AA
+            )
 
 
 def draw_celebration(frame: np.ndarray, event: GameEvent) -> None:

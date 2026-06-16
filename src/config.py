@@ -74,6 +74,57 @@ TRINITY_VIDEO_START = 101.0  # 1:41
 TRINITY_VIDEO_END = 104.0  # 1:44
 TRINITY_FREEZE_HOLD_SEC = 10.0  # duree du gel + texte avant retour auto a l'attract
 
+# ---------------------------------------------------------------------------
+# Quiz Matrix : defis QCM repondus au geste (pointage + maintien)
+# ---------------------------------------------------------------------------
+# Un defi "quiz" pose une question sur l'univers Matrix ; le joueur pointe sa
+# reponse avec l'index (landmark 8) et la maintient QUIZ_DWELL_SEC pour valider.
+# Le quiz alterne strictement avec les figures de geste (figure, quiz, figure,
+# quiz...). Toutes les constantes sont ici pour ajuster vite sur le stand.
+
+# Active l'insertion de defis quiz dans la campagne. Si False, partie 100 %
+# figures comme avant.
+QUIZ_ENABLED = True
+
+# Banque de questions externalisee (editable sans toucher au code). Si le
+# fichier manque ou est invalide, un fallback integre prend le relais.
+QUIZ_QUESTIONS_PATH = PROJECT_ROOT / "assets" / "quiz" / "questions.json"
+
+# Temps imparti par defaut pour repondre (une question peut le surcharger via
+# son champ "duration_s").
+QUIZ_DEFAULT_DURATION_S = 10.0
+
+# Duree de l'ecran d'intro (question affichee, chrono fige) avant le decompte.
+QUIZ_INTRO_SEC = 1.5
+
+# Duree de l'ecran de revelation (bonne/mauvaise reponse + explication).
+QUIZ_REVEAL_SEC = 2.5
+
+# Maintien du doigt sur une reponse pour la valider (dwell).
+QUIZ_DWELL_SEC = 1.2
+
+# Grace en debut de phase active : on ignore le pointage le temps que la main
+# arrive, pour eviter une validation involontaire.
+QUIZ_GRACE_SEC = 0.3
+
+# Nombre maximum de reponses gerees par question (layout 2x2).
+QUIZ_MAX_ANSWERS = 4
+
+# Nombre maximum de quiz inseres dans une partie (cap pour garder une session
+# de stand courte malgre l'alternance stricte).
+QUIZ_MAX_PER_GAME = 4
+
+# Marge anti-bord (fraction de la carte) : la main doit etre franchement dans
+# la zone pour compter, pas a cheval sur le bord.
+QUIZ_ZONE_MARGIN = 0.06
+
+# Mecanique de selection : "A" = pointage + maintien (seule implementee).
+# "B" (comptage de doigts) et "C" (inclinaison) sont reserves pour plus tard.
+QUIZ_SELECTION_MODE = "A"
+
+# Sons de succes/echec du quiz : non cables pour l'instant (feedback visuel).
+QUIZ_SOUND_ENABLED = False
+
 
 @dataclass(slots=True)
 class AppConfig:
