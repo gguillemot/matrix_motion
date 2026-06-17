@@ -885,7 +885,9 @@ def run(cfg: AppConfig) -> None:
                     draw_countdown(display, event)
                 elif event.phase == IN_ROUND:
                     if event.celebration_key:
-                        pass  # celebration en cours : draw_celebration gere seul, pas d'overlay figure
+                        draw_celebration(
+                            display, event
+                        )  # celebration en cours : draw_celebration gere seul, pas d'overlay figure
                     elif not event.figure_active:
                         draw_ready_card(
                             display, event
