@@ -63,7 +63,6 @@ from src.rendering import (
     draw_spoon,
     draw_trinity_outro_text,
     draw_yolo_detections,
-    fit_to_window,
 )
 from src.tracking import (
     MediaPipeInferenceCache,
@@ -853,7 +852,7 @@ def run(cfg: AppConfig) -> None:
                     event=event,
                 )
 
-            cv2.imshow(cfg.window_name, fit_to_window(display, cfg.window_name))
+            cv2.imshow(cfg.window_name, display)
             key = cv2.waitKey(1) & 0xFF
 
             if key in (ord("q"), 27):

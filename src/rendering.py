@@ -393,47 +393,6 @@ def _blink(period: float = 0.8) -> bool:
     return int(time.monotonic() / period) % 2 == 0
 
 
-def fit_to_window(frame: np.ndarray, window_name: str) -> np.ndarray:
-    """Adapte `frame` a la taille reelle de la fenetre en PRESERVANT le ratio
-    (letterbox / pillarbox avec bandes noires).
-
-    En plein ecran, OpenCV etire sinon l'image 16:9 pour remplir un ecran de
-    ratio different : la question et les cartes du quiz se retrouvent deformees.
-    Ici on redimensionne au plus grand format qui tient dans la fenetre sans
-    deformation, puis on centre sur un canvas noir a la taille de la fenetre.
-
-    Le pointage n'est pas affecte : il travaille en coordonnees normalisees de
-    la camera, independantes de l'affichage."""
-    if not hasattr(cv2, "getWindowImageRect"):
-        return frame
-    try:
-        rect = cv2.getWindowImageRect(window_name)
-    except cv2.error:
-        return frame
-    win_w, win_h = int(rect[2]), int(rect[3])
-    if win_w <= 0 or win_h <= 0:
-        return frame  # fenetre minimisee / taille indisponible
-
-    h, w = frame.shape[:2]
-    if w <= 0 or h <= 0:
-        return frame
-    # Deja a la bonne taille : rien a faire (cas fenetre = image native).
-    if (win_w, win_h) == (w, h):
-        return frame
-
-    scale = min(win_w / w, win_h / h)
-    new_w = max(1, int(round(w * scale)))
-    new_h = max(1, int(round(h * scale)))
-    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-    resized = cv2.resize(frame, (new_w, new_h), interpolation=interp)
-
-    canvas = np.zeros((win_h, win_w, 3), dtype=frame.dtype)
-    x0 = (win_w - new_w) // 2
-    y0 = (win_h - new_h) // 2
-    canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
-    return canvas
-
-
 def _draw_progress_bar(
     frame: np.ndarray,
     x: int,
