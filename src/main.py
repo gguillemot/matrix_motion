@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -89,6 +90,66 @@ from src.tracking import (
 _FFPLAY = shutil.which("ffplay")
 
 
+class CameraReader:
+    """Reads frames from a camera in a background thread to prevent buffer accumulation."""
+
+    def __init__(self, camera_index: int, width: int, height: int) -> None:
+        self.camera_index = camera_index
+        self.width = width
+        self.height = height
+        self._cap = cv2.VideoCapture(camera_index)
+        if not self._cap.isOpened():
+            raise RuntimeError(
+                f"Cannot open camera {camera_index}. Try --camera-index 1 or verify permissions."
+            )
+        
+        # Try MJPEG codec first (compressed, faster on USB), fallback to raw
+        mjpeg_fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        self._cap.set(cv2.CAP_PROP_FOURCC, mjpeg_fourcc)
+        
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        
+        # Minimize USB buffer to reduce latency
+        try:
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+        # Log actual negotiated format
+        actual_width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        actual_fps = self._cap.get(cv2.CAP_PROP_FPS)
+        print(f"[CAM] Camera {camera_index}: {actual_width}x{actual_height} @ {actual_fps:.1f} FPS")
+
+        self._current_frame: np.ndarray | None = None
+        self._lock = threading.Lock()
+        self._stop = False
+        self._thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._thread.start()
+
+    def _read_loop(self) -> None:
+        """Read frames continuously in background thread."""
+        while not self._stop:
+            ok, frame = self._cap.read()
+            if not ok:
+                break
+            with self._lock:
+                self._current_frame = frame
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        """Get the latest frame (non-blocking)."""
+        with self._lock:
+            frame = self._current_frame
+        return frame is not None, frame
+
+    def release(self) -> None:
+        """Stop reading and release camera."""
+        self._stop = True
+        self._thread.join(timeout=1.0)
+        self._cap.release()
+
+
 def run(cfg: AppConfig) -> None:
     print("[INFO] Starting Matrix Motion")
     if not cfg.mqtt_disable and "CHANGE_" in cfg.mqtt_topic:
@@ -96,14 +157,7 @@ def run(cfg: AppConfig) -> None:
             "[INFO] MQTT topic/token still on placeholders. Set --mqtt-topic and --mqtt-token."
         )
 
-    cap = cv2.VideoCapture(cfg.camera_index)
-    if not cap.isOpened():
-        raise RuntimeError(
-            "Cannot open camera. Try --camera-index 1 or verify camera permissions."
-        )
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.height)
+    camera = CameraReader(cfg.camera_index, cfg.width, cfg.height)
 
     cv2.namedWindow(cfg.window_name, cv2.WINDOW_NORMAL)
     if not cfg.windowed:
@@ -287,7 +341,7 @@ def run(cfg: AppConfig) -> None:
 
         video_start_ts = time.perf_counter()
 
-        ret, frame = cap.read()
+        ret, frame = camera.read()
         if not ret:
             raise RuntimeError("Camera opened but no frame received.")
 
@@ -528,7 +582,7 @@ def run(cfg: AppConfig) -> None:
             trinity_last_frame = None
 
         while True:
-            ok, frame = cap.read()
+            ok, frame = camera.read()
             if not ok:
                 emit_bench_summary("camera")
                 break
@@ -940,7 +994,7 @@ def run(cfg: AppConfig) -> None:
             pose_landmarker.close()
         if segmenter is not None:
             segmenter.close()
-        cap.release()
+        camera.release()
         cv2.destroyAllWindows()
 
 
