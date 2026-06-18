@@ -67,6 +67,7 @@ from src.rendering import (
     draw_pill_choice,
     draw_pose_skeleton,
     draw_quiz,
+    draw_quiz,
     draw_ready_card,
     draw_round_overlay,
     draw_bullet_stop,
@@ -76,6 +77,7 @@ from src.rendering import (
     draw_spoon,
     draw_trinity_outro_text,
     draw_yolo_detections,
+    fit_to_window,
 )
 from src.tracking import (
     MediaPipeInferenceCache,
@@ -954,7 +956,7 @@ def run(cfg: AppConfig) -> None:
                 _qr_last_result = None
                 _qr_last_at = 0.0
 
-            cv2.imshow(cfg.window_name, display)
+            cv2.imshow(cfg.window_name, fit_to_window(display, cfg.window_name))
             key = cv2.waitKey(1) & 0xFF
 
             if key in (ord("q"), 27):
