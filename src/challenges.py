@@ -276,16 +276,38 @@ def select_quiz_questions(
     rng: random.Random | None = None,
     shuffle: bool = True,
 ) -> list[QuizQuestion]:
-    """Selectionne `count` questions distinctes, en difficulte croissante."""
+    """Selectionne `count` questions distinctes, en difficulte croissante.
+
+    Le tirage est aleatoire sur TOUTE la banque : on melange puis on coupe a
+    `count` AVANT de trier par difficulte. (Trier avant de couper renverrait
+    toujours les memes questions les plus faciles.) Les reponses de chaque
+    question retenue sont egalement melangees."""
     if not questions or count <= 0:
         return []
     pool = list(questions)
     if shuffle:
         (rng or random).shuffle(pool)
+    chosen = pool[:count]  # sous-ensemble aleatoire de la banque complete
     # Tri stable par difficulte : ramp easy -> medium -> hard, ordre aleatoire
     # conserve a difficulte egale.
-    pool.sort(key=lambda q: QUIZ_DIFFICULTY_RANK.get(q.difficulty, 1))
-    return pool[:count]
+    chosen.sort(key=lambda q: QUIZ_DIFFICULTY_RANK.get(q.difficulty, 1))
+    if shuffle:
+        chosen = [shuffle_quiz_answers(q, rng) for q in chosen]
+    return chosen
+
+
+def shuffle_quiz_answers(
+    question: QuizQuestion, rng: random.Random | None = None
+) -> QuizQuestion:
+    """Retourne une copie de `question` dont les reponses sont permutees, en
+    recalculant `correct_index` pour pointer toujours la bonne reponse."""
+    order = list(range(len(question.answers)))
+    (rng or random).shuffle(order)
+    return replace(
+        question,
+        answers=[question.answers[i] for i in order],
+        correct_index=order.index(question.correct_index),
+    )
 
 
 def make_quiz_challenge(question: QuizQuestion) -> Challenge:
