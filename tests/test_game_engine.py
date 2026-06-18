@@ -12,6 +12,8 @@ from src.challenges import (
 )
 from src.game_engine import (
     ATTRACT,
+    BADGE_SCAN,
+    BADGE_SCAN_SEC,
     BLUE_ENDING,
     COUNTDOWN,
     IN_ROUND,
@@ -46,30 +48,30 @@ def make_engine(**kwargs) -> GameEngine:
     )
 
 
-def choose_pill(engine: GameEngine, pill: str, publish=lambda p: True):
+def choose_pill(engine: GameEngine, pill: str):
     """Depuis PILL_CHOICE (start_game a t=0) : paume maintenue 0.95 s sur la pilule."""
     zone_x, zone_y = PILL_ZONES[pill]
-    engine.update([palm(zone_x, zone_y)], None, 0.1, publish)
-    return engine.update([palm(zone_x, zone_y)], None, 1.05, publish)
+    engine.update([palm(zone_x, zone_y)], None, 0.1)
+    return engine.update([palm(zone_x, zone_y)], None, 1.05)
 
 
-def start_red_game(engine: GameEngine, publish=lambda p: True):
+def start_red_game(engine: GameEngine):
     """Partie lancee + pilule rouge : premier round a 4.1 s (deadline 12.1)."""
     engine.start_game(0.0)
-    choose_pill(engine, "red", publish)  # COUNTDOWN jusqu'a 4.05
-    return engine.update([], None, 4.1, publish)
+    choose_pill(engine, "red")  # COUNTDOWN jusqu'a 4.05
+    return engine.update([], None, 4.1)
 
 
 def succeed_dodge(engine: GameEngine, hold_start: float):
     """Tient la posture d'esquive DODGE_HOLD_SEC pour valider la figure 1."""
-    engine.update([], dodge_pose(), hold_start, lambda pill: True)
-    return engine.update([], dodge_pose(), hold_start + 0.55, lambda pill: True)
+    engine.update([], dodge_pose(), hold_start)
+    return engine.update([], dodge_pose(), hold_start + 0.55)
 
 
 class GameEngineTests(unittest.TestCase):
     def test_starts_in_attract(self) -> None:
         engine = make_engine()
-        event = engine.update([], None, 0.0, lambda pill: True)
+        event = engine.update([], None, 0.0)
 
         self.assertEqual(event.phase, ATTRACT)
         self.assertEqual(event.round_total, 4)
@@ -78,9 +80,9 @@ class GameEngineTests(unittest.TestCase):
     def test_palm_hold_opens_pill_choice(self) -> None:
         engine = make_engine()
 
-        first = engine.update([palm(), palm()], None, 0.0, lambda pill: True)
-        midway = engine.update([palm(), palm()], None, 0.5, lambda pill: True)
-        second = engine.update([palm(), palm()], None, 1.05, lambda pill: True)
+        first = engine.update([palm(), palm()], None, 0.0)
+        midway = engine.update([palm(), palm()], None, 0.5)
+        second = engine.update([palm(), palm()], None, 1.05)
 
         self.assertEqual(first.phase, ATTRACT)
         self.assertAlmostEqual(midway.start_hold_progress, 0.5)
@@ -89,44 +91,39 @@ class GameEngineTests(unittest.TestCase):
 
     def test_intro_plays_before_pill_choice(self) -> None:
         engine = make_engine(has_intro=True)
-        engine.update([palm(), palm()], None, 0.0, lambda pill: True)
-        event = engine.update([palm(), palm()], None, 1.05, lambda pill: True)
+        engine.update([palm(), palm()], None, 0.0)
+        event = engine.update([palm(), palm()], None, 1.05)
         self.assertEqual(event.phase, INTRO)
 
         engine.finish_intro(15.0)
-        after = engine.update([], None, 15.1, lambda pill: True)
+        after = engine.update([], None, 15.1)
         self.assertEqual(after.phase, PILL_CHOICE)
 
-    def test_red_pill_starts_countdown_and_publishes(self) -> None:
-        published: list[str] = []
+    def test_red_pill_starts_countdown(self) -> None:
         engine = make_engine()
         engine.start_game(0.0)
 
-        event = choose_pill(engine, "red", lambda p: published.append(p) or True)
+        event = choose_pill(engine, "red")
 
         self.assertEqual(event.phase, COUNTDOWN)
         self.assertEqual(event.chosen_pill, "red")
-        self.assertTrue(event.published)
-        self.assertEqual(published, ["red"])
         self.assertEqual(event.flash_message, "RED PILL ACCEPTED")
 
     def test_blue_pill_returns_to_reality(self) -> None:
-        published: list[str] = []
         engine = make_engine()
         engine.start_game(0.0)
 
-        event = choose_pill(engine, "blue", lambda p: published.append(p) or True)
+        event = choose_pill(engine, "blue")
 
         self.assertEqual(event.phase, BLUE_ENDING)
         self.assertEqual(event.chosen_pill, "blue")
-        self.assertEqual(published, ["blue"])
         self.assertFalse(event.rain_boost)
 
     def test_pill_choice_idle_returns_to_attract(self) -> None:
         engine = make_engine()
         engine.start_game(0.0)
 
-        event = engine.update([], None, 30.1, lambda pill: True)
+        event = engine.update([], None, 30.1)
 
         self.assertEqual(event.phase, ATTRACT)
 
@@ -135,8 +132,8 @@ class GameEngineTests(unittest.TestCase):
         engine.start_game(0.0)
         choose_pill(engine, "blue")
 
-        engine.update([palm(), palm()], None, 2.0, lambda pill: True)
-        event = engine.update([palm(), palm()], None, 3.05, lambda pill: True)
+        engine.update([palm(), palm()], None, 2.0)
+        event = engine.update([palm(), palm()], None, 3.05)
 
         self.assertEqual(event.phase, PILL_CHOICE)
         self.assertIsNone(event.chosen_pill)
@@ -146,7 +143,7 @@ class GameEngineTests(unittest.TestCase):
         engine.start_game(0.0)
         choose_pill(engine, "blue")  # BLUE_ENDING a 1.05
 
-        event = engine.update([], None, 1.05 + 25.1, lambda pill: True)
+        event = engine.update([], None, 1.05 + 25.1)
 
         self.assertEqual(event.phase, ATTRACT)
 
@@ -162,7 +159,7 @@ class GameEngineTests(unittest.TestCase):
         engine = make_engine()
         start_red_game(engine)
 
-        event = engine.update([], None, 12.2, lambda pill: True)
+        event = engine.update([], None, 12.2)
 
         self.assertEqual(event.phase, IN_ROUND)
         self.assertEqual(event.round_index, 2)
@@ -171,29 +168,25 @@ class GameEngineTests(unittest.TestCase):
         self.assertFalse(event.round_results[0].success)
 
     def test_all_timeouts_end_on_score_screen(self) -> None:
-        published: list[str] = []
-        publish = lambda pill: published.append(pill) or True  # noqa: E731
         engine = make_engine()
-        start_red_game(engine, publish)
+        start_red_game(engine)
 
         for _ in range(4):
             now = engine.state.round_deadline + 0.1
-            event = engine.update([], None, now, publish)
+            event = engine.update([], None, now)
 
         self.assertEqual(event.phase, SCORE)
         self.assertEqual(event.score, 0)
         self.assertEqual(len(event.round_results), 4)
         self.assertFalse(event.new_record)  # score nul ne bat pas de record
-        # La seule publication MQTT est celle du choix de pilule
-        self.assertEqual(published, ["red"])
 
     def test_dodge_requires_holding_the_pose(self) -> None:
         engine = make_engine()
         start_red_game(engine)
 
-        instant = engine.update([], dodge_pose(), 4.2, lambda pill: True)
-        midway = engine.update([], dodge_pose(), 4.5, lambda pill: True)
-        held = engine.update([], dodge_pose(), 4.75, lambda pill: True)
+        instant = engine.update([], dodge_pose(), 4.2)
+        midway = engine.update([], dodge_pose(), 4.5)
+        held = engine.update([], dodge_pose(), 4.75)
 
         self.assertEqual(instant.score, 0)
         self.assertEqual(midway.score, 0)
@@ -220,7 +213,7 @@ class GameEngineTests(unittest.TestCase):
         self.assertEqual(first.combo, 1)
 
         event = engine.update(
-            [], None, engine.state.round_deadline + 0.1, lambda pill: True
+            [], None, engine.state.round_deadline + 0.1
         )
 
         self.assertEqual(event.combo, 0)
@@ -231,8 +224,8 @@ class GameEngineTests(unittest.TestCase):
         # Neo Dodge : succes a 4.75, fenetre BULLET_TIME_REPLAY_SEC=4.5 s -> jusqu'a 9.25
         success = succeed_dodge(engine, 4.2)
 
-        during = engine.update([], None, 5.7, lambda pill: True)
-        after = engine.update([], None, 9.3, lambda pill: True)
+        during = engine.update([], None, 5.7)
+        after = engine.update([], None, 9.3)
 
         self.assertEqual(success.celebration_key, "neo_dodge")
         self.assertEqual(during.celebration_key, "neo_dodge")
@@ -245,7 +238,7 @@ class GameEngineTests(unittest.TestCase):
         # Neo Dodge : fenetre BULLET_TIME_REPLAY_SEC=4.5 s -> transition jusqu'a 9.25
         succeed_dodge(engine, 4.2)
 
-        event = engine.update([], dodge_pose(), 5.7, lambda pill: True)
+        event = engine.update([], dodge_pose(), 5.7)
 
         self.assertEqual(event.score, 95)
         self.assertEqual(len(event.round_results), 1)
@@ -280,25 +273,29 @@ class GameEngineTests(unittest.TestCase):
         engine.state.score = 300
 
         # Rejouer reste possible pendant la fenetre de score (avant l'outro).
-        engine.update([palm(), palm()], None, 10.0, lambda pill: True)
-        event = engine.update([palm(), palm()], None, 11.05, lambda pill: True)
+        engine.update([palm(), palm()], None, 10.0)
+        event = engine.update([palm(), palm()], None, 11.05)
 
         self.assertEqual(event.phase, PILL_CHOICE)
         self.assertEqual(event.score, 0)
 
-    def test_score_advances_to_trinity_outro(self) -> None:
+    def test_score_advances_to_badge_scan_then_trinity_outro(self) -> None:
         engine = make_engine()
         engine.start_game(0.0)
         engine.state.phase = SCORE
         engine.state.phase_entered_at = 10.0
 
-        before = engine.update([], None, 10.0 + SCORE_HOLD_SEC - 0.1, lambda pill: True)
-        after = engine.update([], None, 10.0 + SCORE_HOLD_SEC + 0.1, lambda pill: True)
+        before = engine.update([], None, 10.0 + SCORE_HOLD_SEC - 0.1)
+        badge = engine.update([], None, 10.0 + SCORE_HOLD_SEC + 0.1)
+        outro = engine.update(
+            [], None, 10.0 + SCORE_HOLD_SEC + 0.1 + BADGE_SCAN_SEC + 0.1
+        )
 
         self.assertEqual(before.phase, SCORE)
-        self.assertEqual(after.phase, TRINITY_OUTRO)
+        self.assertEqual(badge.phase, BADGE_SCAN)
+        self.assertEqual(outro.phase, TRINITY_OUTRO)
 
-    def test_score_hold_waits_for_final_celebration(self) -> None:
+    def test_score_hold_waits_for_final_celebration_before_badge_scan(self) -> None:
         # Une celebration finale qui deborde sur l'ecran de score retarde l'outro :
         # le compte des SCORE_HOLD_SEC ne demarre qu'apres celebration_until.
         engine = make_engine()
@@ -307,15 +304,15 @@ class GameEngineTests(unittest.TestCase):
         engine.state.phase_entered_at = 10.0
         engine.state.celebration_until = 20.0  # celebration finale jusqu'a t=20
 
-        during = engine.update([], None, 19.9, lambda pill: True)  # celeb pas finie
+        during = engine.update([], None, 19.9)  # celeb pas finie
         just_after = engine.update(
-            [], None, 20.0 + SCORE_HOLD_SEC - 0.1, lambda pill: True
+            [], None, 20.0 + SCORE_HOLD_SEC - 0.1
         )
-        done = engine.update([], None, 20.0 + SCORE_HOLD_SEC + 0.1, lambda pill: True)
+        done = engine.update([], None, 20.0 + SCORE_HOLD_SEC + 0.1)
 
         self.assertEqual(during.phase, SCORE)
         self.assertEqual(just_after.phase, SCORE)
-        self.assertEqual(done.phase, TRINITY_OUTRO)
+        self.assertEqual(done.phase, BADGE_SCAN)
 
     def test_trinity_outro_returns_to_attract(self) -> None:
         engine = make_engine()
@@ -323,10 +320,10 @@ class GameEngineTests(unittest.TestCase):
         engine.state.phase_entered_at = 20.0
 
         still = engine.update(
-            [], None, 20.0 + TRINITY_OUTRO_DURATION - 0.1, lambda pill: True
+            [], None, 20.0 + TRINITY_OUTRO_DURATION - 0.1
         )
         done = engine.update(
-            [], None, 20.0 + TRINITY_OUTRO_DURATION + 0.1, lambda pill: True
+            [], None, 20.0 + TRINITY_OUTRO_DURATION + 0.1
         )
 
         self.assertEqual(still.phase, TRINITY_OUTRO)

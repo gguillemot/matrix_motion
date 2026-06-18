@@ -50,7 +50,6 @@ from src.game_engine import (
     TRINITY_OUTRO,
     GameEngine,
 )
-from src.mqtt_client import MQTTConfig, MQTTPublisher
 from src.rendering import (
     MatrixRain,
     compose_matrix_scene,
@@ -154,10 +153,6 @@ class CameraReader:
 
 def run(cfg: AppConfig) -> None:
     print("[INFO] Starting Matrix Motion")
-    if not cfg.mqtt_disable and "CHANGE_" in cfg.mqtt_topic:
-        print(
-            "[INFO] MQTT topic/token still on placeholders. Set --mqtt-topic and --mqtt-token."
-        )
 
     camera = CameraReader(cfg.camera_index, cfg.width, cfg.height)
 
@@ -166,17 +161,6 @@ def run(cfg: AppConfig) -> None:
         cv2.setWindowProperty(
             cfg.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN
         )
-
-    publisher = MQTTPublisher(
-        MQTTConfig(
-            enabled=not cfg.mqtt_disable,
-            host=cfg.mqtt_host,
-            port=cfg.mqtt_port,
-            topic=cfg.mqtt_topic,
-            token=cfg.mqtt_token,
-            client_id=cfg.mqtt_client_id,
-        )
-    )
 
     yolo_worker: YoloWorker | None = None
     model: YOLO | None = None
@@ -206,7 +190,6 @@ def run(cfg: AppConfig) -> None:
     engine = GameEngine(
         round_duration=cfg.round_duration,
         countdown_duration=cfg.countdown_duration,
-        victory_pill=cfg.victory_pill,
         best_score_path=PROJECT_ROOT / "highscore.json",
         has_intro=has_intro,
     )
@@ -653,9 +636,7 @@ def run(cfg: AppConfig) -> None:
             pose_observation = observe_pose(pose_results)
 
             now = time.monotonic()
-            event = engine.update(hands, pose_observation, now, publisher.publish_pill)
-            if event.published:
-                print(f"[MQTT] pill published: {event.chosen_pill or 'default'}")
+            event = engine.update(hands, pose_observation, now)
 
             # Keep bullet-time source frames only when Neo Dodge can use them.
             should_buffer_for_bullet_time = (
@@ -988,7 +969,6 @@ def run(cfg: AppConfig) -> None:
                         cfg.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN
                     )
     finally:
-        publisher.close()
         try:
             close_intro()
             close_bullet_stop_video()

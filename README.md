@@ -6,7 +6,6 @@ Real-time demo with a camera in Matrix style:
 - Face detection (MediaPipe)
 - Hand gesture recognition (MediaPipe Hands)
 - Fullscreen neon green HUD + Matrix rain effect (code rain rendered **behind** the segmented player)
-- Optional MQTT trigger to your NodeMCU servo project
 
 ## Mode jeu BreizhCamp 2026
 
@@ -19,7 +18,7 @@ PILL_CHOICE --pilule rouge--> COUNTDOWN (3, 2, 1) --> IN_ROUND (4 epreuves + qui
 SCORE -->= 3s apres la celebration finale--> TRINITY_OUTRO (clip 1:41->1:44 gele + texte + QR) --ESPACE / ~10s--> ATTRACT
 ```
 
-Demarrage : montrer **2 paumes ouvertes pendant 1 s** face a la camera (zero calibration). Le jeu s'ouvre sur le **choix des pilules** : la bleue ramene a la realite (camera brute, aucun effet Matrix, invite a rejouer), la rouge lance les 4 epreuves. La pilule choisie est publiee en MQTT **au moment du choix**. Une epreuve ratee (temps ecoule) passe simplement a la suivante avec 0 point : le parcours rouge se termine toujours sur l'ecran de score.
+Demarrage : montrer **2 paumes ouvertes pendant 1 s** face a la camera (zero calibration). Le jeu s'ouvre sur le **choix des pilules** : la bleue ramene a la realite (camera brute, aucun effet Matrix, invite a rejouer), la rouge lance les 4 epreuves. Une epreuve ratee (temps ecoule) passe simplement a la suivante avec 0 point : le parcours rouge se termine toujours sur l'ecran de score.
 
 ### Clips video
 
@@ -65,7 +64,7 @@ Les 5 figures physiques (seuils geometriques documentes dans `src/challenges.py`
 
 | Figure | Action joueur | Detection |
 |---|---|---|
-| Choix des pilules (ouverture) | Attraper une des 2 pilules affichees avec la paume ouverte | Paume dans la hitbox 0.9 s — la pilule choisie part en MQTT, la bleue termine la partie |
+| Choix des pilules (ouverture) | Attraper une des 2 pilules affichees avec la paume ouverte | Paume dans la hitbox 0.9 s — la bleue termine la partie |
 | The Neo Dodge | Pencher fortement buste + tete sur le cote, tenir 0.5 s | Offset nez / centre des epaules >= 30 % de l'envergure d'epaules |
 | Follow the White Rabbit | Oreilles de lapin (index + majeur) au-dessus de la tete | 2 mains `bunny_ears` au-dessus du nez, 0.9 s |
 | There Is No Spoon | Tordre par "telekinesie" la cuillere geante au centre de l'ecran : pincer pouce-index et tourner la main | Pince pouce-index + rotation cumulee >= 45° |
@@ -101,8 +100,7 @@ Degradation propre : si le modele ou MediaPipe echoue, le jeu retombe automatiqu
 - `src/game_engine.py`: campaign state machine and round progression
 - `src/challenges.py`: gesture recognition and campaign definitions
 - `src/rendering.py`: HUD, overlays, challenge cards, and visual effects
-- `src/mqtt_client.py`: MQTT payload and publisher
-- `tests/`: unit tests for gestures, transitions, and MQTT payloads
+- `tests/`: unit tests for gestures and state-machine transitions
 
 ## Prerequisite
 
@@ -121,7 +119,7 @@ uv sync --project matrix_motion
 
 ## 2) Run
 
-Minimal run (MQTT optional):
+Minimal run:
 
 ```bash
 uv run --project matrix_motion python main.py
@@ -133,33 +131,13 @@ You can also launch the modular entry point directly:
 uv run --project matrix_motion python -m src.main
 ```
 
-Run with MQTT enabled (recommended for NodeMCU trigger):
-
-```bash
-uv run --project matrix_motion python main.py \
-  --mqtt-host broker.hivemq.com \
-  --mqtt-port 1883 \
-  --mqtt-topic thematrix/pill/CHANGE_TO_UNIQUE_ID \
-  --mqtt-token CHANGE_ME_TO_A_LONG_RANDOM_SECRET
-```
-
-A game always plays the 5 BreizhCamp figures in random order. To force the fallback MQTT pill color (used when the pill figure was missed), pass `--victory-pill red` or `--victory-pill blue`.
+A game always plays the 5 BreizhCamp figures in random order.
 
 ## Controls
 
 - `q` or `Esc`: quit
 - `f`: toggle fullscreen
 - Two hands open, held 1 second: start or restart a game
-
-MQTT is published only once, when the score screen is reached, with the pill chosen by the player during the Red Pill / Blue Pill figure (fallback: `--victory-pill`, `blue` in `auto` mode). Payload:
-
-Payload published to MQTT:
-
-```json
-{"token":"<token>","pill":"red|blue"}
-```
-
-Compatible with your NodeMCU firmware payload format.
 
 ## Tests
 
@@ -201,8 +179,6 @@ uv run --project matrix_motion python main.py --mp-cpu
 # Disable YOLO object detection (keep face + hand)
 uv run --project matrix_motion python main.py --disable-yolo
 
-# Disable MQTT completely
-uv run --project matrix_motion python main.py --mqtt-disable
 
 # Use another camera index
 uv run --project matrix_motion python main.py --camera-index 1

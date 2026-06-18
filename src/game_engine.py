@@ -5,7 +5,7 @@ import math
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Sequence
 
 from src.config import (
     BULLET_STOP_VIDEO_SEC,
@@ -115,7 +115,6 @@ class GameState:
     flash_until: float = 0.0
     chosen_pill: str | None = None
     start_hold_since: float | None = None
-    pill_published: bool = False
     phase_entered_at: float = 0.0
     combo: int = 0
     celebration_key: str = ""
@@ -157,7 +156,6 @@ class GameEvent:
     new_record: bool = False
     round_results: list[RoundResult] = field(default_factory=list)
     badge_scan_time_left: float = 0.0
-    published: bool = False
     # -- Quiz Matrix (defi QCM) --------------------------------------------
     quiz_active: bool = False
     quiz_substate: str = ""
@@ -182,16 +180,14 @@ class GameEngine:
     - pilule bleue -> BLUE_ENDING (camera normale, invite a rejouer) ;
     - pilule rouge -> COUNTDOWN -> IN_ROUND x4 -> SCORE.
 
-    La pilule choisie part en MQTT au moment du choix. Une figure ratee
-    (timeout) passe simplement a la suivante avec 0 point : le parcours
-    rouge se termine toujours sur l'ecran de score.
+    Une figure ratee (timeout) passe simplement a la suivante avec 0 point :
+    le parcours rouge se termine toujours sur l'ecran de score.
     """
 
     def __init__(
         self,
         round_duration: float = 8.0,
         countdown_duration: float = 3.0,
-        victory_pill: str = "auto",
         campaign: list[Challenge] | None = None,
         rng: random.Random | None = None,
         state: GameState | None = None,
@@ -202,7 +198,6 @@ class GameEngine:
         self.state = state or GameState()
         self.round_duration = round_duration
         self.countdown_duration = countdown_duration
-        self.victory_pill = victory_pill
         self._rng = rng or random.Random()
         self._fixed_campaign = campaign
         self._quiz_questions = (
@@ -249,7 +244,6 @@ class GameEngine:
         state.round_index = 0
         state.round_results = []
         state.chosen_pill = None
-        state.pill_published = False
         state.flash_message = ""
         state.flash_until = 0.0
         state.start_hold_since = None
@@ -282,7 +276,6 @@ class GameEngine:
         hands: Sequence[HandObservation],
         pose: PoseObservation | None,
         now: float,
-        publish_pill: Callable[[str], bool],
     ) -> GameEvent:
         self._now = now
         state = self.state
@@ -339,10 +332,6 @@ class GameEngine:
             self._figure_progress = progress
             if validated:
                 state.chosen_pill = validated
-                published = False
-                if not state.pill_published:
-                    state.pill_published = True
-                    published = publish_pill(validated)
                 if validated == "blue":
                     # Fin de l'histoire : retour a la realite, camera normale.
                     state.phase = BLUE_ENDING
@@ -353,7 +342,7 @@ class GameEngine:
                     self._set_flash("RED PILL ACCEPTED", now)
                 self._figure_progress = 0.0
                 self._pill_hover = None
-                return self._snapshot(published=published)
+                return self._snapshot()
             return self._snapshot()
 
         if state.phase == COUNTDOWN:
@@ -585,7 +574,7 @@ class GameEngine:
         except OSError as exc:
             print(f"[SCORE] could not persist best score: {exc}")
 
-    def _snapshot(self, published: bool = False) -> GameEvent:
+    def _snapshot(self) -> GameEvent:
         state = self.state
         now = self._now
 
@@ -693,7 +682,6 @@ class GameEngine:
                 if state.phase == BADGE_SCAN
                 else 0.0
             ),
-            published=published,
             quiz_active=quiz_active,
             quiz_substate=quiz_substate,
             quiz_question=quiz_question,

@@ -306,10 +306,10 @@ class QuizEngineTests(unittest.TestCase):
         """Lance la partie + pilule rouge, jusqu'au debut du round quiz."""
         engine.start_game(0.0)
         red_x, red_y = PILL_ZONES["red"]
-        engine.update([palm(red_x, red_y)], None, 0.1, lambda p: True)
-        engine.update([palm(red_x, red_y)], None, 1.05, lambda p: True)  # COUNTDOWN
-        engine.update([], None, 4.1, lambda p: True)  # fin du decompte -> IN_ROUND
-        event = engine.update([], None, 4.2, lambda p: True)  # creation du quiz (intro)
+        engine.update([palm(red_x, red_y)], None, 0.1)
+        engine.update([palm(red_x, red_y)], None, 1.05)  # COUNTDOWN
+        engine.update([], None, 4.1)  # fin du decompte -> IN_ROUND
+        event = engine.update([], None, 4.2)  # creation du quiz (intro)
         self.assertEqual(event.phase, IN_ROUND)
         self.assertEqual(event.challenge_kind, "quiz")
         self.assertEqual(event.quiz_substate, "intro")
@@ -320,14 +320,14 @@ class QuizEngineTests(unittest.TestCase):
         self._start_quiz_round(engine)
         zone = engine._quiz.zones[1]
         hand = point_at(zone)
-        engine.update([], None, 5.7, lambda p: True)  # -> active (intro 1.5 s)
-        engine.update([hand], None, 6.1, lambda p: True)  # dwell start (apres grace)
-        engine.update([hand], None, 7.4, lambda p: True)  # verrou correct
-        event = engine.update([hand], None, 7.5, lambda p: True)
+        engine.update([], None, 5.7)  # -> active (intro 1.5 s)
+        engine.update([hand], None, 6.1)  # dwell start (apres grace)
+        engine.update([hand], None, 7.4)  # verrou correct
+        event = engine.update([hand], None, 7.5)
         self.assertEqual(event.quiz_substate, "reveal")
         self.assertEqual(event.quiz_result, "correct")
         # Fin du reveal (2.5 s) -> SCORE avec points > 0.
-        event = engine.update([], None, 10.1, lambda p: True)
+        event = engine.update([], None, 10.1)
         self.assertEqual(event.phase, SCORE)
         self.assertGreater(event.score, 0)
 
@@ -336,10 +336,10 @@ class QuizEngineTests(unittest.TestCase):
         engine = GameEngine(campaign=[make_quiz_challenge(question)])
         self._start_quiz_round(engine)
         wrong = point_at(engine._quiz.zones[0])
-        engine.update([], None, 5.7, lambda p: True)
-        engine.update([wrong], None, 6.1, lambda p: True)
-        engine.update([wrong], None, 7.4, lambda p: True)
-        event = engine.update([], None, 10.2, lambda p: True)
+        engine.update([], None, 5.7)
+        engine.update([wrong], None, 6.1)
+        engine.update([wrong], None, 7.4)
+        event = engine.update([], None, 10.2)
         self.assertEqual(event.phase, SCORE)
         self.assertEqual(event.score, 0)
         self.assertEqual(engine.state.combo, 0)
@@ -348,9 +348,9 @@ class QuizEngineTests(unittest.TestCase):
         question = two_answer_question(correct=1)
         engine = GameEngine(campaign=[make_quiz_challenge(question)])
         self._start_quiz_round(engine)
-        engine.update([], None, 5.7, lambda p: True)  # active_at = 5.7
-        engine.update([], None, 16.0, lambda p: True)  # timer 10 s ecoule -> timeout
-        event = engine.update([], None, 19.0, lambda p: True)  # fin reveal -> SCORE
+        engine.update([], None, 5.7)  # active_at = 5.7
+        engine.update([], None, 16.0)  # timer 10 s ecoule -> timeout
+        event = engine.update([], None, 19.0)  # fin reveal -> SCORE
         self.assertEqual(event.phase, SCORE)
         self.assertEqual(event.score, 0)
 
