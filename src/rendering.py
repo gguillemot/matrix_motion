@@ -1159,7 +1159,7 @@ def _draw_quiz_text(
 
     # Question sur un panneau sombre translucide borde de vert (lisible par-dessus
     # la camera + la pluie de code). Police bornee pour tenir meme en 720p.
-    q_font = _pil_font(max(22, min(int(h * 0.050), int((region_bottom - region_top) * 0.30))))
+    q_font = _pil_font(min(int(h * 0.070), int((region_bottom - region_top) * 0.42)))
     q_size = int(getattr(q_font, "size", int(h * 0.046)))
     q_lh = int(q_size * 1.28)
     q_lines = _wrap_text(draw, event.quiz_question, q_font, int(w * 0.80))
@@ -1206,8 +1206,8 @@ def _draw_quiz_text(
         y += q_lh
 
     # Libelles des reponses, centres dans chaque carte (apres la lettre A/B/C/D).
-    a_font = _pil_font(max(15, int(h * 0.027)))
-    a_lh = int(getattr(a_font, "size", int(h * 0.027)) * 1.2)
+    a_font = _pil_font(int(h * 0.040))
+    a_lh = int(getattr(a_font, "size", int(h * 0.040)) * 1.2)
     for i, zone in enumerate(event.quiz_zones):
         if i >= len(event.quiz_answers):
             break
@@ -1219,8 +1219,11 @@ def _draw_quiz_text(
                 color = _QUIZ_RGB_GREEN
             elif i == event.quiz_selected_index:
                 color = _QUIZ_RGB_RED
-        text_x0 = x0 + 52
-        lines = _wrap_text(draw, event.quiz_answers[i], a_font, max(40, (x1 - x0) - 68))
+        gutter = int(w * 0.042)
+        text_x0 = x0 + gutter
+        lines = _wrap_text(
+            draw, event.quiz_answers[i], a_font, max(40, (x1 - x0) - gutter - int(w * 0.013))
+        )
         total = a_lh * len(lines)
         ty = y0 + ((y1 - y0) - total) // 2
         for line in lines:
@@ -1243,8 +1246,8 @@ def _draw_quiz_text(
     elif event.quiz_substate == QUIZ_ACTIVE and not event.quiz_hand_detected:
         info_text = "Leve la main pour pointer"
     if info_text:
-        i_font = _pil_font(max(15, int(h * 0.026)))
-        i_lh = int(getattr(i_font, "size", int(h * 0.026)) * 1.2)
+        i_font = _pil_font(int(h * 0.032))
+        i_lh = int(getattr(i_font, "size", int(h * 0.032)) * 1.2)
         i_lines = _wrap_text(draw, info_text, i_font, int(w * 0.8))
         # Ancre le bas du bloc juste au-dessus de la barre de temps / des cartes.
         info_anchor = int(card_top * h) - int(h * 0.055)
@@ -1284,11 +1287,11 @@ def draw_quiz(frame: np.ndarray, event: GameEvent) -> None:
         cv2.putText(
             frame,
             f"{event.quiz_timer_left:0.1f}s",
-            (margin, bar_y - 10),
+            (margin, bar_y - int(h * 0.014)),
             cv2.FONT_HERSHEY_DUPLEX,
-            0.8,
+            max(0.8, h / 720.0),
             timer_color,
-            2,
+            max(2, int(h / 480)),
             cv2.LINE_AA,
         )
 
@@ -1319,11 +1322,11 @@ def draw_quiz(frame: np.ndarray, event: GameEvent) -> None:
             cv2.putText(
                 frame,
                 _QUIZ_LETTERS[i],
-                (x0 + 14, y0 + 38),
+                (x0 + int(w * 0.011), y0 + int(h * 0.055)),
                 cv2.FONT_HERSHEY_DUPLEX,
-                1.0,
+                h / 600.0,
                 border,
-                2,
+                max(2, int(h / 360)),
                 cv2.LINE_AA,
             )
 
