@@ -196,10 +196,10 @@ def _make_base_options(model_name: str, prefer_gpu: bool = True) -> mpt.BaseOpti
     return mpt.BaseOptions(model_asset_path=model_path)
 
 
-def create_hand_landmarker() -> mpt.vision.HandLandmarker:
+def create_hand_landmarker(prefer_gpu: bool = True) -> mpt.vision.HandLandmarker:
     try:
         hand_options = mpt.vision.HandLandmarkerOptions(
-            base_options=_make_base_options("hand_landmarker.task", prefer_gpu=True),
+            base_options=_make_base_options("hand_landmarker.task", prefer_gpu=prefer_gpu),
             running_mode=mpt.vision.RunningMode.VIDEO,
             num_hands=2,
             min_hand_detection_confidence=0.55,
@@ -219,10 +219,10 @@ def create_hand_landmarker() -> mpt.vision.HandLandmarker:
         return mpt.vision.HandLandmarker.create_from_options(hand_options)
 
 
-def create_face_detector() -> mpt.vision.FaceDetector:
+def create_face_detector(prefer_gpu: bool = True) -> mpt.vision.FaceDetector:
     try:
         face_options = mpt.vision.FaceDetectorOptions(
-            base_options=_make_base_options("face_detector.tflite", prefer_gpu=True),
+            base_options=_make_base_options("face_detector.tflite", prefer_gpu=prefer_gpu),
             running_mode=mpt.vision.RunningMode.VIDEO,
             min_detection_confidence=0.55,
         )
@@ -242,29 +242,25 @@ def create_image_segmenter() -> mpt.vision.ImageSegmenter:
     Utilise pour incruster la pluie de code DERRIERE la personne. Renvoie des
     masques de confiance (float 0..1) qui donnent des bords plus doux qu'un
     masque de categorie binaire.
+
+    Force le delegate CPU : le delegate GPU de MediaPipe (Metal sur macOS) fait
+    planter la conversion vers texture GPU par un CHECK C++ qui abort le process
+    (non rattrapable en Python, donc le fallback try/except ne sert a rien ici).
+    Le CPU est le seul chemin portable Linux / Windows / macOS.
     """
-    try:
-        segmenter_options = mpt.vision.ImageSegmenterOptions(
-            base_options=_make_base_options("selfie_segmenter.tflite", prefer_gpu=True),
-            running_mode=mpt.vision.RunningMode.VIDEO,
-            output_category_mask=False,
-            output_confidence_masks=True,
-        )
-        return mpt.vision.ImageSegmenter.create_from_options(segmenter_options)
-    except Exception:
-        segmenter_options = mpt.vision.ImageSegmenterOptions(
-            base_options=_make_base_options("selfie_segmenter.tflite", prefer_gpu=False),
-            running_mode=mpt.vision.RunningMode.VIDEO,
-            output_category_mask=False,
-            output_confidence_masks=True,
-        )
-        return mpt.vision.ImageSegmenter.create_from_options(segmenter_options)
+    segmenter_options = mpt.vision.ImageSegmenterOptions(
+        base_options=_make_base_options("selfie_segmenter.tflite", prefer_gpu=False),
+        running_mode=mpt.vision.RunningMode.VIDEO,
+        output_category_mask=False,
+        output_confidence_masks=True,
+    )
+    return mpt.vision.ImageSegmenter.create_from_options(segmenter_options)
 
 
-def create_pose_landmarker() -> mpt.vision.PoseLandmarker:
+def create_pose_landmarker(prefer_gpu: bool = True) -> mpt.vision.PoseLandmarker:
     try:
         pose_options = mpt.vision.PoseLandmarkerOptions(
-            base_options=_make_base_options("pose_landmarker_lite.task", prefer_gpu=True),
+            base_options=_make_base_options("pose_landmarker_lite.task", prefer_gpu=prefer_gpu),
             running_mode=mpt.vision.RunningMode.VIDEO,
             num_poses=1,
             min_pose_detection_confidence=0.55,

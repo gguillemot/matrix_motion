@@ -163,6 +163,7 @@ class AppConfig:
     benchmark_seconds: float
     benchmark_runs: int
     badge_scan_first: bool = False
+    mp_cpu: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -230,6 +231,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run segmentation every N frames",
     )
     parser.add_argument("--disable-yolo", action="store_true")
+    parser.add_argument(
+        "--mp-cpu",
+        action="store_true",
+        help=(
+            "force tous les modeles MediaPipe (main/visage/pose) sur le delegate "
+            "CPU. A utiliser quand le delegate GPU plante (ex: Metal sur macOS). "
+            "Le segmenter est deja toujours en CPU."
+        ),
+    )
     parser.add_argument("--window-name", type=str, default="THE MATRIX")
     parser.add_argument("--windowed", action="store_true")
 
@@ -348,4 +358,5 @@ def parse_args(argv: Sequence[str] | None = None) -> AppConfig:
         benchmark_seconds=max(0.0, args.benchmark_seconds),
         benchmark_runs=max(1, args.benchmark_runs),
         badge_scan_first=args.badge_scan_first,
+        mp_cpu=args.mp_cpu,
     )

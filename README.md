@@ -167,9 +167,37 @@ Compatible with your NodeMCU firmware payload format.
 uv run --project matrix_motion python -m unittest discover -s tests
 ```
 
+## Cross-platform check (Linux / Windows / macOS)
+
+Before an event, verify the inference pipeline survives on the target machine. The
+smoke test loads every model and runs one inference on a synthetic frame (no camera,
+no display). **Exit code 0 = this machine can run the pipeline.** A bad GPU delegate
+(e.g. Metal on macOS) crashes via a C++ `abort()` that Python cannot catch, so the
+exit code is the reliable signal.
+
+```bash
+# Portable CPU path (the safe default, == running the app with --mp-cpu)
+uv run --project matrix_motion python scripts/smoke_test.py
+
+# Probe whether THIS machine's GPU delegate survives
+uv run --project matrix_motion python scripts/smoke_test.py --gpu
+```
+
+The MediaPipe **selfie segmenter always runs on CPU** (its GPU/Metal path aborts).
+The hand/face/pose landmarkers prefer the GPU delegate by default; if that crashes on
+your machine (notably macOS Metal), run the app with `--mp-cpu` to force them onto CPU:
+
+```bash
+# macOS / any machine whose MediaPipe GPU delegate crashes
+uv run --project matrix_motion python main.py --mp-cpu
+```
+
 ## Useful options
 
 ```bash
+# Force all MediaPipe models onto CPU (use when the GPU delegate crashes, e.g. macOS Metal)
+uv run --project matrix_motion python main.py --mp-cpu
+
 # Disable YOLO object detection (keep face + hand)
 uv run --project matrix_motion python main.py --disable-yolo
 

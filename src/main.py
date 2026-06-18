@@ -315,12 +315,16 @@ def run(cfg: AppConfig) -> None:
             except Exception as exc:
                 print(f"[YOLO] disabled (load failed): {exc}")
 
-        hand_landmarker = create_hand_landmarker()
-        print("[HAND] landmarker loaded (GPU delegate if available)")
-        face_detector = create_face_detector()
-        print("[FACE] detector loaded (GPU delegate if available)")
-        pose_landmarker = create_pose_landmarker()
-        print("[POSE] landmarker loaded (GPU delegate if available)")
+        # --mp-cpu force le delegate CPU (le delegate GPU MediaPipe plante sur
+        # certains environnements, ex: Metal sur macOS). Sinon, GPU si dispo.
+        mp_prefer_gpu = not cfg.mp_cpu
+        mp_backend = "CPU forced" if cfg.mp_cpu else "GPU delegate if available"
+        hand_landmarker = create_hand_landmarker(prefer_gpu=mp_prefer_gpu)
+        print(f"[HAND] landmarker loaded ({mp_backend})")
+        face_detector = create_face_detector(prefer_gpu=mp_prefer_gpu)
+        print(f"[FACE] detector loaded ({mp_backend})")
+        pose_landmarker = create_pose_landmarker(prefer_gpu=mp_prefer_gpu)
+        print(f"[POSE] landmarker loaded ({mp_backend})")
 
         # Segmentation pour le fond "code rain" derriere la personne. Si le
         # modele ou la lib echoue, on retombe proprement sur l'ancienne pluie
@@ -335,7 +339,7 @@ def run(cfg: AppConfig) -> None:
                     blur_ksize=MASK_BLUR_KSIZE,
                     invert=MASK_INVERT,
                 )
-                print("[SEG] selfie segmenter loaded (GPU delegate if available, code rain behind person)")
+                print("[SEG] selfie segmenter loaded (CPU delegate, code rain behind person)")
             except Exception as exc:
                 print(f"[SEG] disabled (load failed): {exc} -- fallback rain overlay")
                 segmenter = None
@@ -716,6 +720,8 @@ def run(cfg: AppConfig) -> None:
             mask = None
             if mask_tracker is not None and matrix_scene:
                 if seg_cache.should_run() or seg_cache.get() is None:
+                    # Segmenter sur delegate CPU (cf. create_image_segmenter) :
+                    # il accepte l'image SRGB partagee, pas de conversion dediee.
                     mask = mask_tracker.update(mp_image, timestamp_ms, (h_frame, w_frame))
                     seg_cache.set(mask)
                     bench_seg_runs += 1
