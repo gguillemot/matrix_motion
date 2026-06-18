@@ -326,9 +326,10 @@ def run(cfg: AppConfig) -> None:
         pose_landmarker = create_pose_landmarker(prefer_gpu=mp_prefer_gpu)
         print(f"[POSE] landmarker loaded ({mp_backend})")
 
-        # Segmentation pour le fond "code rain" derriere la personne. Si le
-        # modele ou la lib echoue, on retombe proprement sur l'ancienne pluie
-        # par-dessus la camera (mask_tracker reste None).
+        # Segmentation pour le fond "code rain" derriere la personne. Par
+        # defaut, on tente le GPU hors macOS et on force le CPU sur macOS.
+        # Si le modele ou la lib echoue, on retombe proprement sur l'ancienne
+        # pluie par-dessus la camera (mask_tracker reste None).
         if SEGMENTATION_ENABLED:
             try:
                 segmenter = create_image_segmenter()
@@ -339,7 +340,7 @@ def run(cfg: AppConfig) -> None:
                     blur_ksize=MASK_BLUR_KSIZE,
                     invert=MASK_INVERT,
                 )
-                print("[SEG] selfie segmenter loaded (CPU delegate, code rain behind person)")
+                print("[SEG] selfie segmenter loaded (GPU if available, CPU on macOS)")
             except Exception as exc:
                 print(f"[SEG] disabled (load failed): {exc} -- fallback rain overlay")
                 segmenter = None

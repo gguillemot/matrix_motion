@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import platform
 import ssl
 import threading
 import urllib.request
@@ -196,6 +197,11 @@ def _make_base_options(model_name: str, prefer_gpu: bool = True) -> mpt.BaseOpti
     return mpt.BaseOptions(model_asset_path=model_path)
 
 
+def _default_segmenter_prefer_gpu() -> bool:
+    """Prefer GPU sauf sur macOS, où le segmenter peut crasher au chargement."""
+    return platform.system() != "Darwin"
+
+
 def create_hand_landmarker(prefer_gpu: bool = True) -> mpt.vision.HandLandmarker:
     try:
         hand_options = mpt.vision.HandLandmarkerOptions(
@@ -236,25 +242,39 @@ def create_face_detector(prefer_gpu: bool = True) -> mpt.vision.FaceDetector:
         return mpt.vision.FaceDetector.create_from_options(face_options)
 
 
-def create_image_segmenter() -> mpt.vision.ImageSegmenter:
+def create_image_segmenter(prefer_gpu: bool | None = None) -> mpt.vision.ImageSegmenter:
     """Selfie Segmentation : masque de confiance personne/fond en temps reel.
 
     Utilise pour incruster la pluie de code DERRIERE la personne. Renvoie des
     masques de confiance (float 0..1) qui donnent des bords plus doux qu'un
     masque de categorie binaire.
 
-    Force le delegate CPU : le delegate GPU de MediaPipe (Metal sur macOS) fait
-    planter la conversion vers texture GPU par un CHECK C++ qui abort le process
-    (non rattrapable en Python, donc le fallback try/except ne sert a rien ici).
-    Le CPU est le seul chemin portable Linux / Windows / macOS.
+    Par defaut, on tente le GPU hors macOS et on force le CPU sur macOS, car le
+    delegate GPU MediaPipe (Metal) peut faire abort le process de maniere non
+    rattrapable en Python. Si l'initialisation GPU echoue simplement, on retombe
+    sur le CPU.
     """
+    if prefer_gpu is None:
+        prefer_gpu = _default_segmenter_prefer_gpu()
+
     segmenter_options = mpt.vision.ImageSegmenterOptions(
-        base_options=_make_base_options("selfie_segmenter.tflite", prefer_gpu=False),
+        base_options=_make_base_options("selfie_segmenter.tflite", prefer_gpu=prefer_gpu),
         running_mode=mpt.vision.RunningMode.VIDEO,
         output_category_mask=False,
         output_confidence_masks=True,
     )
-    return mpt.vision.ImageSegmenter.create_from_options(segmenter_options)
+    try:
+        return mpt.vision.ImageSegmenter.create_from_options(segmenter_options)
+    except Exception:
+        if prefer_gpu:
+            fallback_options = mpt.vision.ImageSegmenterOptions(
+                base_options=_make_base_options("selfie_segmenter.tflite", prefer_gpu=False),
+                running_mode=mpt.vision.RunningMode.VIDEO,
+                output_category_mask=False,
+                output_confidence_masks=True,
+            )
+            return mpt.vision.ImageSegmenter.create_from_options(fallback_options)
+        raise
 
 
 def create_pose_landmarker(prefer_gpu: bool = True) -> mpt.vision.PoseLandmarker:
