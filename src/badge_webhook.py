@@ -26,7 +26,7 @@ def _norm(value: object) -> str:
 
 
 def _make_payload(
-    first_name: str, last_name: str, email: str
+    first_name: str, last_name: str, email: str, company: str = ""
 ) -> dict[str, str] | None:
     email = email.strip().lower()
     if not email:
@@ -35,15 +35,19 @@ def _make_payload(
         "prenom": first_name.strip(),
         "nom": last_name.strip(),
         "email": email,
+        "entreprise": company.strip(),
     }
 
 
 def extract_badge_contact(qr_data: str) -> dict[str, str] | None:
     """Extrait prenom/nom/email depuis un QR badge BreizhCamp (format CSV).
 
-    Format attendu (avec ou sans entête) :
-        id,lastname,firstname,email,company,ticketType,...
-        1,Baratheon,Robert,robert.baratheon@example.com,...
+    Format attendu (sans entête) :
+        "LANNISTER","TYRION","Hand of the King","tyrion.lannister@casterly-rock.wes"
+        → lastname(0), firstname(1), company(2), email(3)
+
+    Si une entête est détectée (mots-clés : lastname, firstname, email, id),
+    la lecture se fait par nom de colonne (rétrocompatibilité).
 
     Retourne None si les données sont absentes ou si l'email est manquant.
     """
@@ -59,21 +63,21 @@ def extract_badge_contact(qr_data: str) -> dict[str, str] | None:
 
         first_lower = [c.strip().lower() for c in rows[0]]
         if any(h in first_lower for h in ("lastname", "firstname", "email", "id")):
-            # Entête présent → lecture par nom de colonne
+            # Entête présent → lecture par nom de colonne (rétrocompatibilité)
             data_rows = rows[1:]
             col_idx = {name: i for i, name in enumerate(first_lower)}
         else:
-            # Pas d'entête → convention positionnelle BreizhCamp
-            # id(0), lastname(1), firstname(2), email(3)
+            # Pas d'entête → convention positionnelle
+            # lastname(0), firstname(1), company(2), email(3)
             data_rows = rows
-            col_idx = {"id": 0, "lastname": 1, "firstname": 2, "email": 3}
+            col_idx = {"lastname": 0, "firstname": 1, "company": 2, "email": 3}
 
         for row in data_rows:
             def _get(key: str, _row: list[str] = row, _idx: dict = col_idx) -> str:
                 idx = _idx.get(key)
                 return _norm(_row[idx]) if idx is not None and idx < len(_row) else ""
 
-            payload = _make_payload(_get("firstname"), _get("lastname"), _get("email"))
+            payload = _make_payload(_get("firstname"), _get("lastname"), _get("email"), _get("company"))
             if payload is not None:
                 return payload
     except Exception:

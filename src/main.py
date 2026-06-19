@@ -87,7 +87,7 @@ from src.rendering import (
     draw_yolo_detections,
     fit_to_window,
 )
-from src.rendering import (
+from src.tracking import (
     MediaPipeInferenceCache,
     PersonMaskTracker,
     YoloWorker,
