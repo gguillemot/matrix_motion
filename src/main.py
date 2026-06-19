@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
 from pathlib import Path
 
@@ -38,6 +42,11 @@ from src.config import (
     parse_args,
 )
 from src.challenges import observe_hands, observe_pose
+from src.badge_webhook import (
+    extract_badge_contact,
+    send_async as send_badge_async,
+    WEBHOOK_REPOST_COOLDOWN_SEC as _WEBHOOK_REPOST_COOLDOWN_SEC,
+)
 from src.game_engine import (
     ATTRACT,
     BADGE_SCAN,
@@ -78,7 +87,7 @@ from src.rendering import (
     draw_yolo_detections,
     fit_to_window,
 )
-from src.tracking import (
+from src.rendering import (
     MediaPipeInferenceCache,
     PersonMaskTracker,
     YoloWorker,
@@ -341,6 +350,8 @@ def run(cfg: AppConfig) -> None:
         qr_detector = cv2.QRCodeDetector()
         _qr_last_result: str | None = None
         _qr_last_at: float = 0.0
+        _last_webhook_payload: dict[str, str] | None = None
+        _last_webhook_sent_at: float = 0.0
 
         frame_idx = 0
         last_tick = time.perf_counter()
@@ -808,6 +819,16 @@ def run(cfg: AppConfig) -> None:
                 if qr_data:
                     _qr_last_result = qr_data
                     _qr_last_at = now
+                    payload = extract_badge_contact(qr_data)
+                    if payload is not None:
+                        should_send = (
+                            _last_webhook_payload != payload
+                            or (now - _last_webhook_sent_at) >= _WEBHOOK_REPOST_COOLDOWN_SEC
+                        )
+                        if should_send:
+                            send_badge_async(payload)
+                            _last_webhook_payload = payload
+                            _last_webhook_sent_at = now
                 draw_badge_scan_screen(
                     display, event, _qr_last_result, _qr_last_at
                 )
